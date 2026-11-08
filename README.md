@@ -79,6 +79,21 @@ cd src-tauri && cargo test --lib stress -- --ignored --nocapture --test-threads=
 Put your own real-world files (Dolby Atmos, Dolby Vision, Eclipsa/IAMF exports, …) in
 `test-media/corpus/` and the stress suite plays them too. See [TESTING.md](TESTING.md).
 
+## Packages
+
+| Platform | Built where | Output | Runtime requirement | Status |
+|---|---|---|---|---|
+| Windows x64 | locally (`npx tauri build`) or CI | `.msi`, NSIS `-setup.exe` | VLC 3.x 64-bit installed, or a `vlc/` folder next to `halcyon.exe` | built and smoke-tested locally |
+| macOS (Apple silicon, Intel) | CI only (needs a Mac) | `.dmg`, `.app` | `/Applications/VLC.app` (3.x) | CI workflow written, not yet run; video opens in libVLC's own window (embedding not implemented) |
+| Linux x64 | CI only | `.deb` (depends on `libvlc5`), `.rpm`, `.AppImage` | system libVLC 3 | CI workflow written, not yet run; video opens in libVLC's own window |
+
+CI: `.github/workflows/release.yml` builds all three on GitHub-hosted runners when a `v*` tag is
+pushed (or when run manually) and attaches the installers to a draft release. Installers are unsigned;
+Windows SmartScreen and macOS Gatekeeper will warn until code signing is configured.
+
+libVLC is **not bundled**: shipping VLC's full plugin set would bring GPL plugins into the package
+(see [LICENSE_AUDIT.md](LICENSE_AUDIT.md)). That decision is still open.
+
 ## Documents
 
 [ARCHITECTURE](ARCHITECTURE.md) · [ENGINE_DECISIONS](ENGINE_DECISIONS.md) · [FEATURE_MATRIX](FEATURE_MATRIX.md) ·

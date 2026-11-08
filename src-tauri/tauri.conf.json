@@ -11,12 +11,115 @@
   },
   "app": {
     "windows": [
-      { "title": "Halcyon", "width": 1200, "height": 720, "minWidth": 420, "minHeight": 300, "center": true }
+      {
+        "title": "Halcyon",
+        "width": 1200,
+        "height": 720,
+        "minWidth": 420,
+        "minHeight": 300,
+        "center": true
+      }
     ],
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost",
-      "assetProtocol": { "enable": true, "scope": ["$CONFIG/vlc/art/**"] }
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$CONFIG/vlc/art/**"
+        ]
+      }
     }
   },
-  "bundle": { "active": true, "targets": "all", "icon": ["icons/icon.ico", "icons/icon.png"] }
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "publisher": "Halcyon",
+    "category": "Video",
+    "shortDescription": "Local-first universal media player",
+    "longDescription": "Halcyon plays local and network media through libVLC, with an out-of-process media inspector. It needs VLC 3.x installed (or bundled next to the executable as ./vlc).",
+    "copyright": "Halcyon contributors",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": [
+          "mp4",
+          "mkv",
+          "avi",
+          "mov",
+          "webm",
+          "wmv",
+          "flv",
+          "ts",
+          "m2ts",
+          "mpg",
+          "mpeg",
+          "vob",
+          "3gp",
+          "ogv",
+          "mxf"
+        ],
+        "name": "Video",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "mp3",
+          "flac",
+          "wav",
+          "aiff",
+          "aac",
+          "m4a",
+          "opus",
+          "ogg",
+          "wma",
+          "wv",
+          "ac3",
+          "eac3",
+          "dts",
+          "mka",
+          "iamf"
+        ],
+        "name": "Audio",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "m3u",
+          "m3u8",
+          "pls",
+          "xspf"
+        ],
+        "name": "Playlist",
+        "role": "Viewer"
+      }
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libvlc5",
+          "vlc-plugin-base",
+          "vlc-plugin-video-output"
+        ]
+      },
+      "rpm": {
+        "depends": [
+          "vlc-libs"
+        ]
+      }
+    }
+  }
 }

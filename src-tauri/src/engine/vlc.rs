@@ -151,7 +151,15 @@ pub struct VlcEngine {
 // libVLC objects are thread-safe; access is additionally serialised by a Mutex.
 unsafe impl Send for VlcEngine {}
 
-/// Directories searched for libvlc.dll, in priority order.
+#[cfg(windows)]
+const LIB_NAME: &str = "libvlc.dll";
+#[cfg(target_os = "macos")]
+const LIB_NAME: &str = "libvlc.dylib";
+#[cfg(all(unix, not(target_os = "macos")))]
+const LIB_NAME: &str = "libvlc.so.5";
+
+/// Directories searched for libVLC, in priority order: override, a copy
+/// bundled next to the executable, then the platform's standard VLC install.
 fn candidate_dirs() -> Vec<PathBuf> {
     let mut v = Vec::new();
     if let Ok(d) = std::env::var("HALCYON_LIBVLC_DIR") {
@@ -162,12 +170,37 @@ fn candidate_dirs() -> Vec<PathBuf> {
             v.push(d.join("vlc"));
         }
     }
+    #[cfg(windows)]
     for var in ["ProgramFiles", "ProgramW6432"] {
         if let Ok(pf) = std::env::var(var) {
             v.push(Path::new(&pf).join("VideoLAN").join("VLC"));
         }
     }
+    #[cfg(target_os = "macos")]
+    v.push(PathBuf::from("/Applications/VLC.app/Contents/MacOS/lib"));
+    #[cfg(all(unix, not(target_os = "macos")))]
+    for d in ["/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/lib", "/usr/local/lib", "/usr/lib/aarch64-linux-gnu"] {
+        v.push(PathBuf::from(d));
+    }
     v
+}
+
+#[cfg(windows)]
+unsafe fn open_library(dir: &Path) -> Result<Library, String> {
+    // Altered search path makes Windows resolve libvlccore.dll next to libvlc.dll.
+    libloading::os::windows::Library::load_with_flags(dir.join(LIB_NAME), libloading::os::windows::LOAD_WITH_ALTERED_SEARCH_PATH)
+        .map(Into::into)
+        .map_err(|e| format!("Failed to load {LIB_NAME}: {e}"))
+}
+
+#[cfg(not(windows))]
+unsafe fn open_library(dir: &Path) -> Result<Library, String> {
+    // VLC.app keeps its plugins outside the lib folder; tell libvlccore where.
+    #[cfg(target_os = "macos")]
+    if std::env::var_os("VLC_PLUGIN_PATH").is_none() {
+        std::env::set_var("VLC_PLUGIN_PATH", dir.join("../plugins"));
+    }
+    Library::new(dir.join(LIB_NAME)).map_err(|e| format!("Failed to load {LIB_NAME}: {e}"))
 }
 
 impl VlcEngine {
@@ -179,16 +212,10 @@ impl VlcEngine {
     pub fn load_with_args(extra: &[&str]) -> Result<Self, String> {
         let dir = candidate_dirs()
             .into_iter()
-            .find(|d| d.join("libvlc.dll").is_file())
+            .find(|d| d.join(LIB_NAME).is_file())
             .ok_or("libVLC not found. Install VLC 3.x (64-bit) or set HALCYON_LIBVLC_DIR.")?;
         unsafe {
-            // Altered search path makes Windows resolve libvlccore.dll next to libvlc.dll.
-            let lib: Library = libloading::os::windows::Library::load_with_flags(
-                dir.join("libvlc.dll"),
-                libloading::os::windows::LOAD_WITH_ALTERED_SEARCH_PATH,
-            )
-            .map_err(|e| format!("Failed to load libvlc.dll: {e}"))?
-            .into();
+            let lib = open_library(&dir)?;
             let api = Api::load(&lib)?;
             let args: Vec<CString> = ["--no-video-title-show", "--no-snapshot-preview", "--no-metadata-network-access"]
                 .iter()
@@ -297,9 +324,12 @@ impl MediaEngine for VlcEngine {
             }
             (self.api.libvlc_media_player_set_media)(self.player, media);
             (self.api.libvlc_media_release)(media); // player holds its own reference
+            #[cfg(windows)]
             if let Some(h) = surface {
                 (self.api.libvlc_media_player_set_hwnd)(self.player, h as *mut c_void);
             }
+            #[cfg(not(windows))]
+            let _ = surface; // TODO(macOS/Linux): embed via set_nsobject / set_xwindow
         }
         self.play()
     }
