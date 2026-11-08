@@ -1,11 +1,12 @@
 mod engine;
 mod probe;
+mod sources;
 mod surface;
 
-use engine::{EngineInfo, EngineMeta, MediaEngine, PlaybackStatus, TrackSelection};
+use engine::{EngineInfo, EngineMeta, MediaEngine, MediaStats, PlaybackStatus, TrackSelection};
 use serde::Serialize;
 use std::sync::Mutex;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 struct AppState {
     engine: Mutex<Option<Box<dyn MediaEngine>>>,
@@ -47,24 +48,40 @@ fn diagnostics(s: State<AppState>) -> Diagnostics {
     }
 }
 
-/// File passed on the command line ("Open with…" / file association).
+/// Files/folders passed on the command line ("Open with…" / file association).
 #[tauri::command]
-fn startup_file() -> Option<String> {
-    std::env::args().skip(1).find(|a| std::path::Path::new(a).is_file())
+fn startup_files() -> Vec<String> {
+    let args: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
+    sources::expand(&args)
+}
+
+/// Folders → media files, playlists → entries, URLs pass through.
+#[tauri::command]
+async fn expand_sources(items: Vec<String>) -> Res<Vec<String>> {
+    tauri::async_runtime::spawn_blocking(move || sources::expand(&items)).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn is_subtitle_file(path: String) -> bool {
+    sources::is_subtitle(&path)
 }
 
 #[tauri::command]
 async fn open_media(path: String, s: State<'_, AppState>) -> Res<OpenResult> {
+    let local = !engine::is_url(&path);
     let p = path.clone();
-    let probed = tauri::async_runtime::spawn_blocking(move || probe::probe(&p))
-        .await
-        .map_err(|e| e.to_string())?;
+    let probed = if local {
+        Some(tauri::async_runtime::spawn_blocking(move || probe::probe(&p)).await.map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
     let surface = *s.surface.lock().map_err(|_| "surface lock poisoned")?;
     // Probe failure is reported but does not block: libVLC may still play it.
     with_engine(&s, |e| e.open(&path, surface))?;
     let (probe, probe_error) = match probed {
-        Ok(r) => (Some(r), None),
-        Err(e) => (None, Some(e)),
+        Some(Ok(r)) => (Some(r), None),
+        Some(Err(e)) => (None, Some(e)),
+        None => (None, None),
     };
     Ok(OpenResult { path, probe, probe_error })
 }
@@ -80,6 +97,8 @@ fn seek(ms: i64, s: State<AppState>) -> Res<()> { with_engine(&s, |e| Ok(e.seek_
 #[tauri::command]
 fn set_volume(volume: i32, s: State<AppState>) -> Res<()> { with_engine(&s, |e| Ok(e.set_volume(volume))) }
 #[tauri::command]
+fn set_muted(muted: bool, s: State<AppState>) -> Res<()> { with_engine(&s, |e| Ok(e.set_muted(muted))) }
+#[tauri::command]
 fn set_rate(rate: f32, s: State<AppState>) -> Res<()> { with_engine(&s, |e| e.set_rate(rate)) }
 #[tauri::command]
 fn next_frame(s: State<AppState>) -> Res<()> { with_engine(&s, |e| Ok(e.next_frame())) }
@@ -92,7 +111,40 @@ fn set_audio_track(id: i32, s: State<AppState>) -> Res<()> { with_engine(&s, |e|
 #[tauri::command]
 fn set_subtitle_track(id: i32, s: State<AppState>) -> Res<()> { with_engine(&s, |e| e.set_subtitle_track(id)) }
 #[tauri::command]
+fn add_subtitle_file(path: String, s: State<AppState>) -> Res<()> { with_engine(&s, |e| e.add_subtitle_file(&path)) }
+#[tauri::command]
+fn set_audio_delay(ms: i64, s: State<AppState>) -> Res<()> { with_engine(&s, |e| e.set_audio_delay_ms(ms)) }
+#[tauri::command]
+fn set_subtitle_delay(ms: i64, s: State<AppState>) -> Res<()> { with_engine(&s, |e| e.set_subtitle_delay_ms(ms)) }
+#[tauri::command]
+fn set_aspect_ratio(aspect: Option<String>, s: State<AppState>) -> Res<()> {
+    with_engine(&s, |e| Ok(e.set_aspect_ratio(aspect.as_deref())))
+}
+#[tauri::command]
+fn set_deinterlace(mode: Option<String>, s: State<AppState>) -> Res<()> {
+    with_engine(&s, |e| Ok(e.set_deinterlace(mode.as_deref())))
+}
+#[tauri::command]
+fn set_chapter(chapter: i32, s: State<AppState>) -> Res<()> { with_engine(&s, |e| Ok(e.set_chapter(chapter))) }
+#[tauri::command]
+fn video_size(s: State<AppState>) -> Res<Option<(u32, u32)>> { with_engine(&s, |e| Ok(e.video_size())) }
+#[tauri::command]
+fn stats(s: State<AppState>) -> Res<Option<MediaStats>> { with_engine(&s, |e| Ok(e.stats())) }
+#[tauri::command]
 fn meta(s: State<AppState>) -> Res<EngineMeta> { with_engine(&s, |e| Ok(e.meta())) }
+
+/// Saves the current frame as PNG under Pictures/Halcyon and returns its path.
+#[tauri::command]
+fn snapshot(stem: String, app: tauri::AppHandle, s: State<AppState>) -> Res<String> {
+    let dir = app.path().picture_dir().map_err(|e| e.to_string())?.join("Halcyon");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let safe: String = stem.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).take(60).collect();
+    let path = dir.join(format!("{safe}-{stamp}.png"));
+    let p = path.to_string_lossy().into_owned();
+    with_engine(&s, |e| e.snapshot(&p))?;
+    Ok(p)
+}
 
 /// Rectangle in physical pixels relative to the webview (= client area) origin.
 #[tauri::command]
@@ -101,6 +153,11 @@ fn set_video_rect(x: i32, y: i32, w: i32, h: i32, visible: bool, s: State<AppSta
         surface::place(hwnd, x, y, w, h, visible);
     }
     Ok(())
+}
+
+#[tauri::command]
+fn set_cursor_hidden(hidden: bool) {
+    surface::set_cursor_hidden(hidden);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -117,7 +174,11 @@ pub fn run() {
             #[cfg(windows)]
             {
                 let parent = win.hwnd()?.0 as isize;
-                match surface::create(parent) {
+                let handle = app.handle().clone();
+                let sink = move |ev: surface::SurfaceEvent| {
+                    let _ = handle.emit("surface", ev);
+                };
+                match surface::create(parent, sink) {
                     Ok(h) => *app.state::<AppState>().surface.lock().unwrap() = Some(h),
                     Err(e) => eprintln!("{e}"),
                 }
@@ -126,8 +187,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            diagnostics, startup_file, open_media, play, set_paused, stop, seek, set_volume, set_rate,
-            next_frame, status, tracks, set_audio_track, set_subtitle_track, meta, set_video_rect
+            diagnostics, startup_files, expand_sources, is_subtitle_file, open_media, play, set_paused, stop,
+            seek, set_volume, set_muted, set_rate, next_frame, status, tracks, set_audio_track,
+            set_subtitle_track, add_subtitle_file, set_audio_delay, set_subtitle_delay, set_aspect_ratio,
+            set_deinterlace, set_chapter, video_size, stats, meta, snapshot, set_video_rect, set_cursor_hidden
         ])
         .run(tauri::generate_context!())
         .expect("error while running Halcyon");

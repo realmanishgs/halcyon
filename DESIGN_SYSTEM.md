@@ -28,7 +28,7 @@ No web fonts (offline, privacy). Scale: 11 / 12 / 13 (base) / 16 / 22 / 32 px. S
 ## Space & size
 
 Spacing 4 / 8 / 12 / 16 / 24 / 32 / 48. Radius 4 (controls), 6 (artwork) — nothing pill-shaped except the play button.
-Control height 32, icon 18 (24-unit grid, 1.75 stroke), sidebar 216 / 56 collapsed, transport 88.
+Control height 32, icon 18 (24-unit grid, 1.75 stroke). Sidebar 216 default, drag-resizable 160–360, snaps to a 56 px icon rail below 120. Side panel 340 default, resizable 260–60 % of the window.
 
 ## Motion
 
@@ -41,11 +41,21 @@ Disabled → `--text-3`, no hover. Pressed toggles → accent icon (`aria-presse
 
 ## Components (implemented)
 
-Sidebar nav item (current / disabled-with-phase), icon button, play button, primary/secondary button,
-range slider with accent fill (`--fill`), compact select, key-value list (`.kv`), stream block, banner, kbd hint.
+Sidebar nav item (current / disabled-with-phase), splitter, icon button (+ small), play button, primary /
+secondary / small button, chip (toggle), seek bar (rail, fill, chapter ticks, hover time tip, thumb on
+hover/drag), range slider with accent fill (`--fill`), stepper (delay), tabs, key-value list (`.kv`),
+stream block with badges, banner (error / info), drop overlay, modal, queue row (hover actions), kbd hint.
 
 ## Layout rules
 
-- Video box never has HTML overlays (native surface sits above the webview; see ARCHITECTURE).
-- Technical detail lives in the Inspector (toggle `I`), not in the default view.
-- ≤ 900px: transport drops the right cluster; inspector narrows. Touch targets ≥ 32px today, 44px planned for touch builds.
+- VLC-style transport: full-width seek row on top, controls row below (now-playing · transport · options).
+- Every pane stretches: sidebar and panel are drag-resizable; the stage takes the rest.
+- Breakpoints: ≤ 860 px wide → sidebar becomes an icon rail, speed chip and volume slider hide;
+  ≤ 600 px → sidebar hides, secondary transport buttons hide, an open panel takes the full width;
+  ≤ 420 px tall → artwork thumbnail and subtitle line hide. Minimum window 420 × 300.
+- Fullscreen: sidebar and panel hide, controls auto-hide after 2.5 s idle (cursor hidden too) and return
+  on any pointer movement over video or UI.
+- Video box never has HTML overlays (native surface sits above the webview; see ARCHITECTURE). Things that
+  must appear above video are native (context menu) or hide the surface while shown (URL dialog, drop
+  overlay).
+- Technical detail lives in the side panel (Info), not in the default view.

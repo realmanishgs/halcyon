@@ -29,6 +29,9 @@ pub struct Stream {
     pub bit_rate: Option<String>,
     #[serde(default)]
     pub disposition: std::collections::BTreeMap<String, i64>,
+    /// HDR mastering / content light / Dolby Vision configuration, as reported.
+    #[serde(default)]
+    pub side_data_list: Vec<serde_json::Value>,
     #[serde(default)]
     pub tags: std::collections::BTreeMap<String, String>,
 }
@@ -59,6 +62,9 @@ pub struct ProbeResult {
     pub format: Format,
     #[serde(default)]
     pub chapters: Vec<Chapter>,
+    /// Stream groups (e.g. IAMF audio elements / mix presentations), passed through as reported.
+    #[serde(default)]
+    pub stream_groups: Vec<serde_json::Value>,
 }
 
 pub fn ffprobe_path() -> Option<PathBuf> {
@@ -74,7 +80,7 @@ pub fn ffprobe_path() -> Option<PathBuf> {
 pub fn probe(path: &str) -> Result<ProbeResult, String> {
     let bin = ffprobe_path().ok_or("ffprobe not found (install FFmpeg or set HALCYON_FFPROBE)")?;
     let mut cmd = Command::new(bin);
-    cmd.args(["-v", "error", "-print_format", "json", "-show_format", "-show_streams", "-show_chapters", "-i"])
+    cmd.args(["-v", "error", "-print_format", "json", "-show_format", "-show_streams", "-show_chapters", "-show_stream_groups", "-i"])
         .arg(crate::engine::plain_path(path));
     #[cfg(windows)]
     {

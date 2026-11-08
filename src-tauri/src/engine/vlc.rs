@@ -29,6 +29,48 @@ const META_ALBUM: c_int = 4;
 const META_DATE: c_int = 8;
 const META_ARTWORK_URL: c_int = 15;
 
+// libvlc_state_t values used here.
+const STATE_PLAYING: c_int = 3;
+const STATE_STOPPED: c_int = 5;
+const STATE_ENDED: c_int = 6;
+const STATE_ERROR: c_int = 7;
+
+const SLAVE_SUBTITLE: c_int = 0; // libvlc_media_slave_type_subtitle
+
+/// `libvlc_media_stats_t` (libvlc_media.h, VLC 3.0.x).
+#[repr(C)]
+#[derive(Default)]
+struct RawStats {
+    read_bytes: c_int,
+    input_bitrate: f32,
+    demux_read_bytes: c_int,
+    demux_bitrate: f32,
+    demux_corrupted: c_int,
+    demux_discontinuity: c_int,
+    decoded_video: c_int,
+    decoded_audio: c_int,
+    displayed_pictures: c_int,
+    lost_pictures: c_int,
+    played_abuffers: c_int,
+    lost_abuffers: c_int,
+    sent_packets: c_int,
+    sent_bytes: c_int,
+    send_bitrate: f32,
+}
+
+/// Percent-encoded `file:///` URI for a local path (what add_slave expects).
+pub fn file_uri(path: &str) -> String {
+    let p = plain_path(path).replace('\\', "/");
+    let mut out = String::from(if p.starts_with("//") { "file:" } else { "file:///" });
+    for b in p.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 macro_rules! vlc_api {
     ($($name:ident : fn($($arg:ty),*) $(-> $ret:ty)?;)*) => {
         #[allow(non_snake_case)]
@@ -78,6 +120,24 @@ vlc_api! {
     libvlc_video_set_mouse_input: fn(*mut Player, c_uint);
     libvlc_video_set_key_input: fn(*mut Player, c_uint);
     libvlc_track_description_list_release: fn(*mut TrackDescription);
+    libvlc_media_new_location: fn(*mut Inst, *const c_char) -> *mut Media;
+    libvlc_media_get_stats: fn(*mut Media, *mut RawStats) -> c_int;
+    libvlc_media_player_has_vout: fn(*mut Player) -> c_uint;
+    libvlc_media_player_is_seekable: fn(*mut Player) -> c_int;
+    libvlc_media_player_get_chapter: fn(*mut Player) -> c_int;
+    libvlc_media_player_get_chapter_count: fn(*mut Player) -> c_int;
+    libvlc_media_player_set_chapter: fn(*mut Player, c_int);
+    libvlc_media_player_add_slave: fn(*mut Player, c_int, *const c_char, bool) -> c_int;
+    libvlc_audio_get_mute: fn(*mut Player) -> c_int;
+    libvlc_audio_set_mute: fn(*mut Player, c_int);
+    libvlc_audio_get_delay: fn(*mut Player) -> i64;
+    libvlc_audio_set_delay: fn(*mut Player, i64) -> c_int;
+    libvlc_video_get_spu_delay: fn(*mut Player) -> i64;
+    libvlc_video_set_spu_delay: fn(*mut Player, i64) -> c_int;
+    libvlc_video_set_aspect_ratio: fn(*mut Player, *const c_char);
+    libvlc_video_set_deinterlace: fn(*mut Player, *const c_char);
+    libvlc_video_take_snapshot: fn(*mut Player, c_uint, *const c_char, c_uint, c_uint) -> c_int;
+    libvlc_video_get_size: fn(*mut Player, c_uint, *mut c_uint, *mut c_uint) -> c_int;
 }
 
 pub struct VlcEngine {
@@ -167,6 +227,21 @@ impl VlcEngine {
         out
     }
 
+    fn raw_state(&self) -> c_int {
+        unsafe { (self.api.libvlc_media_player_get_state)(self.player) }
+    }
+
+    fn has_media(&self) -> bool {
+        unsafe {
+            let m = (self.api.libvlc_media_player_get_media)(self.player);
+            if m.is_null() {
+                return false;
+            }
+            (self.api.libvlc_media_release)(m);
+            true
+        }
+    }
+
     fn meta_field(&self, media: *mut Media, field: c_int) -> Option<String> {
         unsafe {
             let p = (self.api.libvlc_media_get_meta)(media, field);
@@ -206,11 +281,17 @@ impl MediaEngine for VlcEngine {
         }
     }
 
-    fn open(&mut self, path: &str, surface: Option<isize>) -> Result<(), String> {
-        let c = CString::new(plain_path(path)).map_err(|_| "Path contains NUL")?;
+    fn open(&mut self, source: &str, surface: Option<isize>) -> Result<(), String> {
+        let url = is_url(source);
+        let c = CString::new(if url { source.to_string() } else { engine_path(source) })
+            .map_err(|_| "Path contains NUL")?;
         unsafe {
             (self.api.libvlc_media_player_stop)(self.player);
-            let media = (self.api.libvlc_media_new_path)(self.inst, c.as_ptr());
+            let media = if url {
+                (self.api.libvlc_media_new_location)(self.inst, c.as_ptr())
+            } else {
+                (self.api.libvlc_media_new_path)(self.inst, c.as_ptr())
+            };
             if media.is_null() {
                 return Err(format!("Could not open media: {}", errmsg(&self.api)));
             }
@@ -224,6 +305,13 @@ impl MediaEngine for VlcEngine {
     }
 
     fn play(&mut self) -> Result<(), String> {
+        if !self.has_media() {
+            return Err("Nothing to play".into());
+        }
+        // libVLC 3 ignores play() after the end of the media or an error: reset first.
+        if matches!(self.raw_state(), STATE_ENDED | STATE_ERROR | STATE_STOPPED) {
+            unsafe { (self.api.libvlc_media_player_stop)(self.player) };
+        }
         match unsafe { (self.api.libvlc_media_player_play)(self.player) } {
             0 => Ok(()),
             _ => Err(format!("Playback failed: {}", errmsg(&self.api))),
@@ -239,7 +327,94 @@ impl MediaEngine for VlcEngine {
     }
 
     fn seek_ms(&mut self, ms: i64) {
+        // Seeking needs a running input; after the end (or a stop) restart first.
+        if matches!(self.raw_state(), STATE_ENDED | STATE_STOPPED) && self.play().is_ok() {
+            let t = std::time::Instant::now();
+            while self.raw_state() != STATE_PLAYING && t.elapsed().as_millis() < 1500 {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
         unsafe { (self.api.libvlc_media_player_set_time)(self.player, ms.max(0)) }
+    }
+
+    fn set_muted(&mut self, muted: bool) {
+        unsafe { (self.api.libvlc_audio_set_mute)(self.player, muted as c_int) }
+    }
+
+    fn add_subtitle_file(&mut self, path: &str) -> Result<(), String> {
+        let uri = CString::new(file_uri(path)).map_err(|_| "Path contains NUL")?;
+        match unsafe { (self.api.libvlc_media_player_add_slave)(self.player, SLAVE_SUBTITLE, uri.as_ptr(), true) } {
+            0 => Ok(()),
+            _ => Err("Could not load subtitle file".into()),
+        }
+    }
+
+    fn set_audio_delay_ms(&mut self, ms: i64) -> Result<(), String> {
+        match unsafe { (self.api.libvlc_audio_set_delay)(self.player, ms * 1000) } {
+            0 => Ok(()),
+            _ => Err("Audio delay not available".into()),
+        }
+    }
+
+    fn set_subtitle_delay_ms(&mut self, ms: i64) -> Result<(), String> {
+        match unsafe { (self.api.libvlc_video_set_spu_delay)(self.player, ms * 1000) } {
+            0 => Ok(()),
+            _ => Err("Subtitle delay not available".into()),
+        }
+    }
+
+    fn set_aspect_ratio(&mut self, aspect: Option<&str>) {
+        let c = aspect.and_then(|a| CString::new(a).ok());
+        let p = c.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+        unsafe { (self.api.libvlc_video_set_aspect_ratio)(self.player, p) }
+    }
+
+    fn set_deinterlace(&mut self, mode: Option<&str>) {
+        let c = mode.and_then(|a| CString::new(a).ok());
+        let p = c.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+        unsafe { (self.api.libvlc_video_set_deinterlace)(self.player, p) }
+    }
+
+    fn set_chapter(&mut self, chapter: i32) {
+        unsafe { (self.api.libvlc_media_player_set_chapter)(self.player, chapter) }
+    }
+
+    fn snapshot(&mut self, path: &str) -> Result<(), String> {
+        let c = CString::new(plain_path(path)).map_err(|_| "Path contains NUL")?;
+        match unsafe { (self.api.libvlc_video_take_snapshot)(self.player, 0, c.as_ptr(), 0, 0) } {
+            0 => Ok(()),
+            _ => Err("No video to capture".into()),
+        }
+    }
+
+    fn video_size(&self) -> Option<(u32, u32)> {
+        let (mut w, mut h) = (0, 0);
+        let ok = unsafe { (self.api.libvlc_video_get_size)(self.player, 0, &mut w, &mut h) } == 0;
+        (ok && w > 0 && h > 0).then_some((w, h))
+    }
+
+    fn stats(&self) -> Option<MediaStats> {
+        unsafe {
+            let m = (self.api.libvlc_media_player_get_media)(self.player);
+            if m.is_null() {
+                return None;
+            }
+            let mut r = RawStats::default();
+            let ok = (self.api.libvlc_media_get_stats)(m, &mut r) != 0; // true on success
+            (self.api.libvlc_media_release)(m);
+            ok.then(|| MediaStats {
+                read_bytes: r.read_bytes as i64,
+                input_bitrate_kbps: r.input_bitrate * 8000.0,
+                demux_corrupted: r.demux_corrupted as i64,
+                demux_discontinuity: r.demux_discontinuity as i64,
+                decoded_video: r.decoded_video as i64,
+                decoded_audio: r.decoded_audio as i64,
+                displayed_pictures: r.displayed_pictures as i64,
+                lost_pictures: r.lost_pictures as i64,
+                played_abuffers: r.played_abuffers as i64,
+                lost_abuffers: r.lost_abuffers as i64,
+            })
+        }
     }
 
     fn set_volume(&mut self, volume: i32) {
@@ -274,7 +449,14 @@ impl MediaEngine for VlcEngine {
                 time_ms: (self.api.libvlc_media_player_get_time)(self.player).max(0),
                 length_ms: (self.api.libvlc_media_player_get_length)(self.player).max(0),
                 volume: (self.api.libvlc_audio_get_volume)(self.player),
+                muted: (self.api.libvlc_audio_get_mute)(self.player) == 1,
                 rate: (self.api.libvlc_media_player_get_rate)(self.player),
+                seekable: (self.api.libvlc_media_player_is_seekable)(self.player) != 0,
+                has_video: (self.api.libvlc_media_player_has_vout)(self.player) > 0,
+                chapter: (self.api.libvlc_media_player_get_chapter)(self.player),
+                chapter_count: (self.api.libvlc_media_player_get_chapter_count)(self.player),
+                audio_delay_ms: (self.api.libvlc_audio_get_delay)(self.player) / 1000,
+                subtitle_delay_ms: (self.api.libvlc_video_get_spu_delay)(self.player) / 1000,
             }
         }
     }

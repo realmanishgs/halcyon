@@ -133,3 +133,58 @@ fn verbatim_paths_are_normalised() {
     assert_eq!(plain_path(r"\\?\UNC\nas\share\x.mp4"), r"\\nas\share\x.mp4");
     assert_eq!(plain_path(r"D:\plain.mp3"), r"D:\plain.mp3");
 }
+
+#[test]
+fn pause_then_resume() {
+    let mut e = headless();
+    e.open(&media("h264_aac.mp4"), None).unwrap();
+    wait_for(&e, |s| s.state == PlaybackState::Playing && s.time_ms > 300, 10);
+    e.set_paused(true);
+    let s = wait_for(&e, |s| s.state == PlaybackState::Paused, 5);
+    assert_eq!(s.state, PlaybackState::Paused);
+    let t = s.time_ms;
+    e.set_paused(false);
+    let s = wait_for(&e, |s| s.state == PlaybackState::Playing && s.time_ms > t + 500, 5);
+    assert!(s.time_ms > t + 500, "did not resume: {s:?}");
+}
+
+#[test]
+fn play_and_seek_after_end() {
+    let mut e = headless();
+    e.open(&media("tone.mp3"), None).unwrap();
+    wait_for(&e, |s| s.state == PlaybackState::Playing && s.length_ms > 0, 10);
+    let len = e.status().length_ms;
+    e.seek_ms(len - 300);
+    let s = wait_for(&e, |s| s.state == PlaybackState::Ended, 10);
+    assert_eq!(s.state, PlaybackState::Ended);
+    // Seek after the end restarts the input and lands on the target.
+    e.seek_ms(5_000);
+    let s = wait_for(&e, |s| s.state == PlaybackState::Playing && s.time_ms >= 5_000, 5);
+    assert!(s.state == PlaybackState::Playing && s.time_ms >= 5_000 && s.time_ms < 9_000, "{s:?}");
+    // Play after the end restarts from the beginning.
+    e.seek_ms(len - 300);
+    wait_for(&e, |s| s.state == PlaybackState::Ended, 10);
+    e.play().unwrap();
+    let s = wait_for(&e, |s| s.state == PlaybackState::Playing && s.time_ms > 100, 5);
+    assert!(s.state == PlaybackState::Playing && s.time_ms < 3_000, "{s:?}");
+}
+
+#[test]
+fn path_over_260_chars_plays() {
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../test-media/robust");
+    for i in 1..=10 {
+        p.push(format!("very_long_directory_name_{i:02}"));
+    }
+    p.push("deep_file_beyond_260_characters.opus");
+    if !p.is_file() {
+        eprintln!("skipped: run scripts/make-stress-media.sh");
+        return;
+    }
+    let s = p.to_string_lossy().to_string();
+    assert!(s.chars().count() > 260);
+    assert!(engine_path(&s).chars().count() < 260, "short form expected: {}", engine_path(&s));
+    let mut e = headless();
+    e.open(&s, None).unwrap();
+    let st = wait_for(&e, |s| s.state == PlaybackState::Playing && s.time_ms > 200, 10);
+    assert_eq!(st.state, PlaybackState::Playing);
+}

@@ -1,4 +1,4 @@
-import type { Diagnostics, EngineMeta, OpenResult, ProbeStream } from "./engine";
+import type { Diagnostics, EngineMeta, MediaStats, OpenResult, PlaybackStatus, ProbeStream } from "./engine";
 import { basename } from "./engine";
 
 function Row({ k, v }: { k: string; v?: string | number | null }) {
@@ -18,7 +18,29 @@ const fmtFps = (r?: string) => {
   return b ? `${(a / b).toFixed(3).replace(/\.?0+$/, "")} fps` : r;
 };
 
+/** Labels derived strictly from fields ffprobe reported. */
+function badges(s: ProbeStream): string[] {
+  const out: string[] = [];
+  if (s.color_transfer === "smpte2084") out.push("HDR10 / PQ");
+  if (s.color_transfer === "arib-std-b67") out.push("HLG");
+  const sd = (s as unknown as { side_data_list?: { side_data_type?: string; dv_profile?: number }[] }).side_data_list ?? [];
+  const dovi = sd.find((d) => /DOVI/i.test(d.side_data_type ?? ""));
+  if (dovi) out.push(`Dolby Vision${dovi.dv_profile !== undefined ? ` P${dovi.dv_profile}` : ""}`);
+  if (/atmos/i.test(s.profile ?? "")) out.push("Dolby Atmos");
+  if (s.codec_name === "truehd") out.push("Dolby TrueHD");
+  if (s.codec_name === "eac3") out.push("Dolby Digital Plus");
+  if (s.codec_name === "ac3") out.push("Dolby Digital");
+  if (s.codec_name === "dts") out.push(s.profile ?? "DTS");
+  if (s.width && s.height && s.width * s.height >= 7680 * 4320 * 0.9) out.push("8K");
+  else if (s.width && s.height && s.width * s.height >= 3840 * 2160 * 0.9) out.push("4K");
+  const sr = Number(s.sample_rate ?? 0);
+  const bits = Number(s.bits_per_raw_sample ?? 0) || (s.sample_fmt?.includes("32") ? 32 : s.sample_fmt?.includes("s24") ? 24 : 0);
+  if (s.codec_type === "audio" && (sr > 48000 || bits >= 24)) out.push(`Hi-Res ${bits ? `${bits}-bit/` : ""}${sr / 1000} kHz`);
+  return out;
+}
+
 function StreamBlock({ s }: { s: ProbeStream }) {
+  const b = badges(s);
   return (
     <div className="stream">
       <div className="stream-h">
@@ -27,6 +49,7 @@ function StreamBlock({ s }: { s: ProbeStream }) {
         {s.tags.language && <span className="muted">{s.tags.language}</span>}
         {s.tags.title && <span className="muted">{s.tags.title}</span>}
       </div>
+      {b.length > 0 && <div className="badges">{b.map((x) => <span key={x} className="badge">{x}</span>)}</div>}
       <dl className="kv">
         <Row k="Codec" v={s.codec_long_name ?? s.codec_name} />
         <Row k="Profile" v={s.profile} />
@@ -45,10 +68,13 @@ function StreamBlock({ s }: { s: ProbeStream }) {
   );
 }
 
-export function Inspector({ opened, meta, diag }: { opened: OpenResult | null; meta: EngineMeta | null; diag: Diagnostics | null }) {
+export function Inspector({ opened, meta, diag, stats, videoSize, status }: {
+  opened: OpenResult | null; meta: EngineMeta | null; diag: Diagnostics | null;
+  stats: MediaStats | null; videoSize: [number, number] | null; status: PlaybackStatus;
+}) {
   const p = opened?.probe;
   return (
-    <aside className="inspector" aria-label="Media inspector">
+    <div className="inspector" aria-label="Media inspector">
       <h2>File</h2>
       {opened ? (
         <dl className="kv">
@@ -64,6 +90,22 @@ export function Inspector({ opened, meta, diag }: { opened: OpenResult | null; m
 
       {p && p.streams.length > 0 && (<><h2>Streams ({p.streams.length})</h2>{p.streams.map((s) => <StreamBlock key={s.index} s={s} />)}</>)}
 
+      {p && p.stream_groups.length > 0 && (
+        <>
+          <h2>Stream groups ({p.stream_groups.length})</h2>
+          {p.stream_groups.map((g, i) => (
+            <div className="stream" key={i}>
+              <div className="stream-h"><span className="tag">{String(g.type ?? "group")}</span><span>#{String(g.index ?? i)}</span></div>
+              <dl className="kv">
+                <Row k="ID" v={g.id !== undefined ? String(g.id) : undefined} />
+                <Row k="Streams" v={g.nb_streams !== undefined ? String(g.nb_streams) : undefined} />
+                {Array.isArray(g.components) && <Row k="Components" v={String((g.components as unknown[]).length)} />}
+              </dl>
+            </div>
+          ))}
+        </>
+      )}
+
       {meta && Object.values(meta).some(Boolean) && (
         <>
           <h2>Metadata</h2>
@@ -77,11 +119,28 @@ export function Inspector({ opened, meta, diag }: { opened: OpenResult | null; m
         </>
       )}
 
+      {stats && (
+        <>
+          <h2>Playback statistics</h2>
+          <dl className="kv">
+            <Row k="Output size" v={videoSize ? `${videoSize[0]} × ${videoSize[1]}` : undefined} />
+            <Row k="Input bitrate" v={`${Math.round(stats.input_bitrate_kbps)} kb/s`} />
+            <Row k="Read" v={`${(stats.read_bytes / 1e6).toFixed(1)} MB`} />
+            <Row k="Video decoded" v={status.has_video ? stats.decoded_video : undefined} />
+            <Row k="Frames shown" v={status.has_video ? stats.displayed_pictures : undefined} />
+            <Row k="Frames lost" v={status.has_video ? stats.lost_pictures : undefined} />
+            <Row k="Audio decoded" v={stats.decoded_audio} />
+            <Row k="Audio buffers lost" v={stats.lost_abuffers} />
+            <Row k="Demux errors" v={stats.demux_corrupted + stats.demux_discontinuity} />
+          </dl>
+        </>
+      )}
+
       <h2>Engine</h2>
       <dl className="kv">
         <Row k="Playback" v={diag?.engine ? `${diag.engine.name} ${diag.engine.version}` : diag?.engine_error ?? "—"} />
         <Row k="Inspection" v={diag?.ffprobe ? "ffprobe (out-of-process)" : "ffprobe not found"} />
       </dl>
-    </aside>
+    </div>
   );
 }

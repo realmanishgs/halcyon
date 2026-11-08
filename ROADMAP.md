@@ -15,10 +15,15 @@ REA not available (see REVERSE_ENGINEERING_NOTES).
 - ⏭ Fullscreen (window + surface), double-click to toggle; controls outside/auto-hide strip
 - ⏭ Settings persistence: theme, volume, last folder
 
-## Phase 3 — Core playback
-Queue & playlists (M3U/M3U8/PLS/XSPF import/export), external subtitles + delay + style, audio delay,
-chapters navigation, folder library scan (background thread, incremental), artwork cache, HW-decode
-diagnostics (`--avcodec-hw` modes, verify d3d11va active via stats), compatibility dashboard.
+## Phase 3 — Core playback (largely done 2026-11-08)
+- ✅ Queue, next/prev, auto-advance, repeat/shuffle, M3U/M3U8/PLS/XSPF + folder expansion, drag & drop
+  (window and video surface), resume position, recent files
+- ✅ External subtitles (SRT/ASS/VTT) + drop-to-attach, audio/subtitle delay, chapters, track cycling
+- ✅ Fullscreen with auto-hide, native context menu, VLC-style shortcuts, stretchable layout to 420×300
+- ✅ Stress suite: 79 formats incl. 4K/8K/HDR, Dolby/DTS, hi-res audio, IAMF; robustness; engine torture
+- ✅ D3D11VA hardware decoding verified on this machine (vlc.exe, same plugins)
+- ⏭ Library scan + SQLite; playlist save/export; subtitle styling; hardware-decode toggle + in-app
+  verification; compatibility dashboard listing plugins; network stream tests against a local server
 
 ## Phase 4 — Advanced
 Video adjust/crop/aspect/deinterlace/rotation, screenshots, EQ + normalization + device selection,

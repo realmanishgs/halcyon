@@ -1,112 +1,444 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
+import { Menu } from "@tauri-apps/api/menu";
 import {
-  engine, formatTime, basename,
-  type Diagnostics, type EngineMeta, type OpenResult, type PlaybackStatus, type TrackSelection,
+  engine, basename, store, formatTime, RATES, ASPECTS,
+  type Diagnostics, type EngineMeta, type MediaStats, type OpenResult, type PlaybackStatus,
+  type SurfaceEvent, type TrackSelection,
 } from "./engine";
 import { Icon } from "./icons";
 import { Inspector } from "./Inspector";
+import { SeekBar } from "./SeekBar";
+import { QueuePanel, TunePanel } from "./Panels";
 
 type View = "player" | "settings";
+type PanelTab = "queue" | "info" | "tune";
+type Repeat = "off" | "all" | "one";
 
-const NAV: { id: string; label: string; icon: string; phase?: number }[] = [
-  { id: "home", label: "Home", icon: "home", phase: 2 },
+const NAV: { id: string; label: string; icon: string; phase: number }[] = [
   { id: "library", label: "Library", icon: "library", phase: 2 },
   { id: "music", label: "Music", icon: "music", phase: 6 },
   { id: "videos", label: "Videos", icon: "video", phase: 6 },
   { id: "playlists", label: "Playlists", icon: "list", phase: 3 },
-  { id: "favorites", label: "Favorites", icon: "heart", phase: 6 },
-  { id: "recent", label: "Recently played", icon: "clock", phase: 2 },
   { id: "lab", label: "Immersive Audio Lab", icon: "lab", phase: 5 },
-  { id: "network", label: "Network sources", icon: "network", phase: 4 },
 ];
-
 const MEDIA_EXT = [
   "mp4", "m4v", "mkv", "avi", "mov", "webm", "flv", "wmv", "asf", "ts", "m2ts", "mts", "mpg", "mpeg", "vob",
-  "3gp", "ogg", "ogm", "ogv", "mxf", "mp3", "flac", "wav", "aif", "aiff", "aac", "m4a", "alac", "opus", "oga",
-  "wma", "ape", "wv", "ac3", "eac3", "dts", "thd", "mka", "mid", "midi", "iamf",
+  "3gp", "ogg", "ogm", "ogv", "mxf", "dv", "mp3", "mp2", "flac", "wav", "aif", "aiff", "aac", "m4a", "opus",
+  "oga", "wma", "ape", "wv", "tta", "ac3", "eac3", "ec3", "dts", "thd", "mka", "mid", "midi", "caf", "amr",
+  "au", "iamf", "m3u", "m3u8", "pls", "xspf",
 ];
-const RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3];
-const IDLE: PlaybackStatus = { state: "idle", time_ms: 0, length_ms: 0, volume: 100, rate: 1 };
+const SUB_EXT = ["srt", "ass", "ssa", "vtt", "sub", "idx", "smi", "ttml"];
+const IDLE: PlaybackStatus = {
+  state: "idle", time_ms: 0, length_ms: 0, volume: 100, muted: false, rate: 1, seekable: false,
+  has_video: false, chapter: -1, chapter_count: -1, audio_delay_ms: 0, subtitle_delay_ms: 0,
+};
+const isPlayingState = (s: PlaybackStatus["state"]) => s === "playing" || s === "opening" || s === "buffering";
+const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 
 export default function App() {
   const [view, setView] = useState<View>("player");
-  const [collapsed, setCollapsed] = useState(false);
-  const [showInspector, setShowInspector] = useState(false);
   const [diag, setDiag] = useState<Diagnostics | null>(null);
+  const [queue, setQueue] = useState<string[]>([]);
+  const [index, setIndex] = useState(-1);
+  const [repeat, setRepeat] = useState<Repeat>(() => store.get("repeat", "off"));
+  const [shuffle, setShuffle] = useState<boolean>(() => store.get("shuffle", false));
   const [opened, setOpened] = useState<OpenResult | null>(null);
   const [status, setStatus] = useState<PlaybackStatus>(IDLE);
+  const [receivedAt, setReceivedAt] = useState(0);
   const [tracks, setTracks] = useState<TrackSelection | null>(null);
   const [meta, setMeta] = useState<EngineMeta | null>(null);
+  const [stats, setStats] = useState<MediaStats | null>(null);
+  const [videoSize, setVideoSize] = useState<[number, number] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [scrub, setScrub] = useState<number | null>(null);
+  const [toast, setToast] = useState<{ text: string; action?: { label: string; run: () => void } } | null>(null);
+  const [panel, setPanel] = useState<PanelTab | null>(() => store.get("panel", null));
+  const [panelW, setPanelW] = useState<number>(() => store.get("panelW", 340));
+  const [sideW, setSideW] = useState<number>(() => store.get("sideW", 216));
+  const [sideCollapsed, setSideCollapsed] = useState<boolean>(() => store.get("sideCollapsed", false));
+  const [winW, setWinW] = useState(window.innerWidth);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [controlsShown, setControlsShown] = useState(true);
+  const [dragOver, setDragOver] = useState(false);
+  const [urlOpen, setUrlOpen] = useState(false);
+  const [aspect, setAspect] = useState("default");
+  const [deinterlace, setDeinterlace] = useState<string | null>(null);
+  const [recents, setRecents] = useState<string[]>(() => store.get("recents", []));
   const videoRef = useRef<HTMLDivElement>(null);
+  const transportRef = useRef<HTMLElement>(null);
+  const prevState = useRef<PlaybackStatus["state"]>("idle");
+  const pendingResume = useRef<number | null>(null);
+  const hideTimer = useRef<number | undefined>(undefined);
+  const overTransport = useRef(false);
 
-  const hasVideo = !!opened && (opened.probe
+  // ---------- derived ----------
+  const current = index >= 0 ? queue[index] : null;
+  const probedVideo = opened?.probe
     ? opened.probe.streams.some((s) => s.codec_type === "video" && !s.disposition?.attached_pic)
-    : true); // unknown → give the engine a surface
-  const isPlaying = status.state === "playing" || status.state === "opening" || status.state === "buffering";
+    : null;
+  // Probe when we have it; otherwise trust the engine's video output count.
+  const hasVideo = !!opened && (probedVideo ?? (status.has_video || status.state === "opening"));
+  const playing = isPlayingState(status.state);
+  // libVLC reports length 0 before the input starts and after it ends; fall back to the probed duration.
+  const lengthMs = status.length_ms || Math.round(Number(opened?.probe?.format.duration ?? 0) * 1000);
+  const viewStatus = useMemo(() => ({ ...status, length_ms: lengthMs, seekable: status.seekable || (lengthMs > 0 && !!opened?.probe) }), [status, lengthMs, opened]);
+  const narrow = winW < 860;
+  const tiny = winW < 600;
+  const sidebarHidden = fullscreen || tiny;
+  const sidebarMini = !sidebarHidden && (sideCollapsed || narrow);
+  const panelVisible = !!panel && !fullscreen;
+  const panelTakesOver = panelVisible && tiny;
+  const iamf = !!opened?.probe && (
+    opened.probe.stream_groups.some((g) => String(g.type ?? "").toUpperCase().includes("IAMF")) ||
+    opened.probe.streams.some((s) => s.codec_name === "iamf") ||
+    /iamf/.test(opened.probe.format.format_name ?? ""));
+  const chapters = useMemo(() => (opened?.probe?.chapters ?? []).map((c) => Number(c.start_time ?? 0) * 1000), [opened]);
 
+  useEffect(() => store.set("repeat", repeat), [repeat]);
+  useEffect(() => store.set("shuffle", shuffle), [shuffle]);
+  useEffect(() => store.set("panel", panel), [panel]);
+  useEffect(() => store.set("panelW", panelW), [panelW]);
+  useEffect(() => store.set("sideW", sideW), [sideW]);
+  useEffect(() => store.set("sideCollapsed", sideCollapsed), [sideCollapsed]);
   useEffect(() => { engine.diagnostics().then(setDiag); }, []);
+  useEffect(() => {
+    const onResize = () => setWinW(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const say = useCallback((text: string, action?: { label: string; run: () => void }) => {
+    setToast({ text, action });
+  }, []);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), toast.action ? 6000 : 2500);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  // ---------- engine state ----------
+  const poll = useCallback(() => {
+    engine.status().then((s) => { setStatus(s); setReceivedAt(performance.now()); }).catch(() => {});
+  }, []);
+  useEffect(() => { const t = setInterval(poll, 250); return () => clearInterval(t); }, [poll]);
 
   const refreshDetails = useCallback(() => {
     engine.tracks().then(setTracks).catch(() => {});
     engine.meta().then(setMeta).catch(() => {});
+    engine.videoSize().then(setVideoSize).catch(() => {});
   }, []);
 
-  const openPath = useCallback(async (path: string) => {
+  useEffect(() => {
+    if (panel !== "info" || !opened) return;
+    const t = setInterval(() => engine.stats().then(setStats).catch(() => {}), 1000);
+    return () => clearInterval(t);
+  }, [panel, opened]);
+
+  // ---------- loading ----------
+  const loadIndex = useCallback(async (i: number, list: string[]) => {
+    const src = list[i];
+    if (!src) return;
+    setIndex(i);
     setError(null);
     setTracks(null);
     setMeta(null);
+    setStats(null);
+    setVideoSize(null);
+    setAspect("default");
     try {
-      const r = await engine.open(path);
+      const r = await engine.open(src);
       setOpened(r);
       setView("player");
-      // Elementary streams and tags become available once the input thread has started.
-      setTimeout(refreshDetails, 600);
-      setTimeout(refreshDetails, 2000);
+      const resume = store.get<Record<string, number>>("resume", {})[src];
+      pendingResume.current = resume ?? null;
+      setRecents((old) => {
+        const next = [src, ...old.filter((x) => x !== src)].slice(0, 20);
+        store.set("recents", next);
+        return next;
+      });
+      setTimeout(refreshDetails, 500);
+      setTimeout(refreshDetails, 1800);
+      poll();
     } catch (e) {
-      setError(String(e));
+      setError(`${basename(src)}: ${e}`);
     }
-  }, [refreshDetails]);
+  }, [refreshDetails, poll]);
 
-  useEffect(() => { engine.startupFile().then((f) => { if (f) openPath(f); }); }, [openPath]);
+  const playSources = useCallback(async (items: string[], append = false) => {
+    const expanded = await engine.expand(items);
+    if (!expanded.length) { say("Nothing playable found"); return; }
+    if (append && queue.length) {
+      setQueue((q) => [...q, ...expanded]);
+      say(`Added ${expanded.length} to queue`);
+      return;
+    }
+    setQueue(expanded);
+    if (expanded.length > 1) say(`${expanded.length} items queued`);
+    await loadIndex(0, expanded);
+  }, [queue.length, loadIndex, say]);
 
-  const pickFile = useCallback(async () => {
+  const handleDropped = useCallback(async (paths: string[]) => {
+    if (!paths.length) return;
+    const subs = paths.filter((p) => SUB_EXT.includes(p.split(".").pop()!.toLowerCase()));
+    if (opened && subs.length === paths.length) {
+      for (const s of subs) {
+        await engine.addSubtitleFile(s).then(() => say(`Subtitles: ${basename(s)}`)).catch((e) => setError(String(e)));
+      }
+      setTimeout(refreshDetails, 400);
+      return;
+    }
+    await playSources(paths.filter((p) => !subs.includes(p)));
+  }, [opened, playSources, refreshDetails, say]);
+
+  useEffect(() => { engine.startupFiles().then((f) => { if (f.length) playSources(f); }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pickFiles = useCallback(async () => {
     const f = await openDialog({
-      multiple: false,
-      filters: [{ name: "Media", extensions: MEDIA_EXT }, { name: "All files", extensions: ["*"] }],
+      multiple: true,
+      filters: [{ name: "Media & playlists", extensions: MEDIA_EXT }, { name: "All files", extensions: ["*"] }],
     });
-    if (typeof f === "string") openPath(f);
-  }, [openPath]);
+    if (Array.isArray(f) && f.length) playSources(f);
+  }, [playSources]);
+  const pickFolder = useCallback(async () => {
+    const f = await openDialog({ directory: true, multiple: false });
+    if (typeof f === "string") playSources([f]);
+  }, [playSources]);
+  const pickSubtitle = useCallback(async () => {
+    const f = await openDialog({ multiple: false, filters: [{ name: "Subtitles", extensions: SUB_EXT }] });
+    if (typeof f === "string") handleDropped([f]);
+  }, [handleDropped]);
 
-  // Real engine state, polled; the engine is the single source of truth.
+  // ---------- queue navigation ----------
+  const nextIndex = useCallback((dir: 1 | -1): number | null => {
+    if (!queue.length) return null;
+    if (shuffle && queue.length > 1) {
+      let j = index;
+      while (j === index) j = Math.floor(Math.random() * queue.length);
+      return j;
+    }
+    const j = index + dir;
+    if (j >= 0 && j < queue.length) return j;
+    if (repeat === "all") return (j + queue.length) % queue.length;
+    return null;
+  }, [queue.length, index, shuffle, repeat]);
+
+  const next = useCallback(() => {
+    const j = nextIndex(1);
+    if (j !== null) loadIndex(j, queue); else say("End of queue");
+  }, [nextIndex, loadIndex, queue, say]);
+  const prev = useCallback(() => {
+    if (status.time_ms > 3000) { engine.seek(0); poll(); return; }
+    const j = nextIndex(-1);
+    if (j !== null) loadIndex(j, queue); else { engine.seek(0); poll(); }
+  }, [status.time_ms, nextIndex, loadIndex, queue, poll]);
+
+  // State transitions: end of media, errors, resume.
   useEffect(() => {
-    const t = setInterval(() => { engine.status().then(setStatus).catch(() => {}); }, 250);
-    return () => clearInterval(t);
+    const was = prevState.current;
+    prevState.current = status.state;
+    if (status.state === "playing" && pendingResume.current !== null) {
+      const at = pendingResume.current;
+      pendingResume.current = null;
+      if (at > 0 && (status.length_ms === 0 || at < status.length_ms - 5000)) {
+        engine.seek(at);
+        say(`Resumed at ${formatTime(at)}`, { label: "Start over", run: () => { engine.seek(0); poll(); } });
+      }
+    }
+    if (status.state === "ended" && was !== "ended" && current) {
+      const r = store.get<Record<string, number>>("resume", {});
+      delete r[current];
+      store.set("resume", r);
+      if (repeat === "one") { engine.play(); return; }
+      const j = nextIndex(1);
+      if (j !== null) loadIndex(j, queue);
+    }
+    if (status.state === "error" && was !== "error") {
+      setError(`The engine could not play ${current ? basename(current) : "this media"}.`);
+      const j = nextIndex(1);
+      if (j !== null && queue.length > 1) setTimeout(() => loadIndex(j, queue), 1200);
+    }
+  }, [status.state]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Remember position for long media (resume on next open).
+  useEffect(() => {
+    if (!current || status.state !== "playing" || status.length_ms < 60000) return;
+    if (Math.floor(status.time_ms / 5000) === Math.floor((status.time_ms - 250) / 5000)) return;
+    const r = store.get<Record<string, number>>("resume", {});
+    if (status.time_ms > 10000 && status.time_ms < status.length_ms - 15000) r[current] = status.time_ms;
+    else delete r[current];
+    store.set("resume", r);
+  }, [status.time_ms]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---------- transport actions ----------
+  const act = useCallback((p: Promise<unknown>) => { p.catch((e) => setError(String(e))).finally(poll); }, [poll]);
+  const togglePlay = useCallback(() => {
+    if (!opened) { if (queue.length) loadIndex(Math.max(0, index), queue); else pickFiles(); return; }
+    if (["stopped", "ended", "error", "idle"].includes(status.state)) act(engine.play());
+    else act(engine.setPaused(playing));
+  }, [opened, queue, index, loadIndex, pickFiles, status.state, playing, act]);
+  const seekTo = useCallback((ms: number) => act(engine.seek(ms)), [act]);
+  const seekBy = useCallback((d: number) => {
+    if (lengthMs > 0) seekTo(clamp(status.time_ms + d, 0, lengthMs - 500));
+  }, [status.time_ms, lengthMs, seekTo]);
+  const setVolume = useCallback((v: number) => {
+    const vol = clamp(Math.round(v), 0, 200);
+    act(engine.setVolume(vol));
+    if (status.muted && vol > 0) act(engine.setMuted(false));
+    say(`Volume ${vol}%`);
+  }, [act, status.muted, say]);
+  const toggleMute = useCallback(() => { act(engine.setMuted(!status.muted)); say(status.muted ? "Unmuted" : "Muted"); }, [act, status.muted, say]);
+  const setRate = useCallback((r: number) => {
+    const rate = clamp(Math.round(r * 100) / 100, 0.25, 4);
+    act(engine.setRate(rate));
+    say(`Speed ${rate}×`);
+  }, [act, say]);
+  const stepRate = (dir: 1 | -1) => {
+    const i = RATES.findIndex((x) => x >= status.rate - 0.001);
+    setRate(RATES[clamp((i < 0 ? RATES.length - 1 : i) + dir, 0, RATES.length - 1)]);
+  };
+  const applyAspect = useCallback((a: string) => {
+    setAspect(a);
+    if (a === "fill") {
+      const r = videoRef.current?.getBoundingClientRect();
+      act(engine.setAspectRatio(r ? `${Math.round(r.width)}:${Math.round(r.height)}` : null));
+    } else act(engine.setAspectRatio(a === "default" ? null : a));
+    say(`Aspect: ${a === "fill" ? "stretch to window" : a}`);
+  }, [act, say]);
+  const applyDeinterlace = useCallback((m: string | null) => {
+    setDeinterlace(m);
+    act(engine.setDeinterlace(m));
+    say(`Deinterlace: ${m ?? "off"}`);
+  }, [act, say]);
+  const delay = useCallback((kind: "audio" | "subtitle", d: number) => {
+    const cur = kind === "audio" ? status.audio_delay_ms : status.subtitle_delay_ms;
+    const v = d === 0 ? 0 : cur + d;
+    act(kind === "audio" ? engine.setAudioDelay(v) : engine.setSubtitleDelay(v));
+    say(`${kind === "audio" ? "Audio" : "Subtitle"} delay ${v} ms`);
+  }, [status.audio_delay_ms, status.subtitle_delay_ms, act, say]);
+  const cycleTrack = useCallback((kind: "audio" | "subtitle") => {
+    if (!tracks) return;
+    const list = kind === "audio" ? tracks.audio : tracks.subtitle;
+    if (!list.length) return;
+    const cur = kind === "audio" ? tracks.current_audio : tracks.current_subtitle;
+    const nxt = list[(list.findIndex((t) => t.id === cur) + 1) % list.length];
+    const p = kind === "audio" ? engine.setAudioTrack(nxt.id) : engine.setSubtitleTrack(nxt.id);
+    act(p.then(refreshDetails));
+    say(`${kind === "audio" ? "Audio" : "Subtitles"}: ${nxt.id === -1 ? "off" : nxt.name}`);
+  }, [tracks, act, refreshDetails, say]);
+  const snapshot = useCallback(() => {
+    if (!hasVideo) return;
+    engine.snapshot(current ? basename(current).replace(/\.[^.]+$/, "") : "snapshot")
+      .then((p) => say(`Snapshot saved: ${basename(p)}`)).catch((e) => setError(String(e)));
+  }, [hasVideo, current, say]);
+  const toggleFullscreen = useCallback(async (force?: boolean) => {
+    const w = getCurrentWindow();
+    const next = force ?? !(await w.isFullscreen());
+    await w.setFullscreen(next);
+    setFullscreen(next);
+    setControlsShown(true);
+  }, []);
+  const openPanel = useCallback((t: PanelTab) => setPanel((p) => (p === t ? null : t)), []);
+
+  // ---------- fullscreen auto-hide ----------
+  const wake = useCallback(() => {
+    setControlsShown(true);
+    window.clearTimeout(hideTimer.current);
+    if (!fullscreen) return;
+    hideTimer.current = window.setTimeout(() => {
+      if (!overTransport.current) setControlsShown(false);
+    }, 2500);
+  }, [fullscreen]);
+  useEffect(() => { wake(); }, [fullscreen, wake]);
+  useEffect(() => {
+    const hidden = fullscreen && !controlsShown && playing;
+    engine.setCursorHidden(hidden);
+    document.body.classList.toggle("hide-cursor", hidden);
+  }, [fullscreen, controlsShown, playing]);
+
+  // ---------- context menu (native: draws above the video surface) ----------
+  const showMenu = useCallback(async () => {
+    const t = tracks;
+    const items: Parameters<typeof Menu.new>[0] = {
+      items: [
+        { text: playing ? "Pause" : "Play", action: togglePlay },
+        { text: "Stop", enabled: !!opened, action: () => act(engine.stop()) },
+        { text: "Previous", enabled: queue.length > 0, action: prev },
+        { text: "Next", enabled: queue.length > 1, action: next },
+        { item: "Separator" },
+        { text: fullscreen ? "Exit fullscreen" : "Fullscreen", action: () => toggleFullscreen() },
+        {
+          text: "Speed", items: RATES.map((r) => ({ text: `${r}×`, checked: Math.abs(status.rate - r) < 0.01, action: () => setRate(r) })),
+        },
+        {
+          text: "Audio track", enabled: !!t && t.audio.length > 0,
+          items: (t?.audio ?? []).map((a) => ({ text: a.name, checked: a.id === t?.current_audio, action: () => act(engine.setAudioTrack(a.id).then(refreshDetails)) })),
+        },
+        {
+          text: "Subtitles", enabled: !!opened,
+          items: [
+            ...(t?.subtitle ?? []).map((s) => ({ text: s.id === -1 ? "Off" : s.name, checked: s.id === t?.current_subtitle, action: () => act(engine.setSubtitleTrack(s.id).then(refreshDetails)) })),
+            { item: "Separator" as const },
+            { text: "Add subtitle file…", action: pickSubtitle },
+          ],
+        },
+        {
+          text: "Aspect ratio", enabled: hasVideo,
+          items: ASPECTS.map((a) => ({ text: a === "default" ? "Default" : a === "fill" ? "Stretch to window" : a, checked: aspect === a, action: () => applyAspect(a) })),
+        },
+        {
+          text: "Deinterlace", enabled: hasVideo,
+          items: [null, "blend", "yadif", "yadif2x", "bob", "linear"].map((m) => ({ text: m ?? "Off", checked: deinterlace === m, action: () => applyDeinterlace(m) })),
+        },
+        { text: "Take snapshot", enabled: hasVideo, action: snapshot },
+        { item: "Separator" },
+        { text: "Open file…", action: pickFiles },
+        { text: "Open folder…", action: pickFolder },
+        { text: "Open network stream…", action: () => setUrlOpen(true) },
+        { item: "Separator" },
+        { text: "Media information", action: () => setPanel("info") },
+        { text: "Queue", action: () => setPanel("queue") },
+        { text: "Synchronisation…", action: () => setPanel("tune") },
+      ],
+    };
+    const m = await Menu.new(items);
+    await m.popup();
+  }, [tracks, playing, togglePlay, opened, act, queue.length, prev, next, fullscreen, toggleFullscreen, status.rate, setRate, refreshDetails, pickSubtitle, hasVideo, aspect, applyAspect, deinterlace, applyDeinterlace, snapshot, pickFiles, pickFolder]);
+
+  // ---------- native surface + window drag & drop ----------
+  const handlers = useRef({ togglePlay, toggleFullscreen, showMenu, setVolume, handleDropped, wake, status });
+  handlers.current = { togglePlay, toggleFullscreen, showMenu, setVolume, handleDropped, wake, status };
+  useEffect(() => {
+    const unSurface = listen<SurfaceEvent>("surface", ({ payload: e }) => {
+      const h = handlers.current;
+      switch (e.kind) {
+        case "down": getCurrentWebview().setFocus().catch(() => {}); h.wake(); break;
+        case "click": break; // single click reserved (VLC: none) — avoids pausing on double-click
+        case "doubleclick": h.toggleFullscreen(); break;
+        case "context": h.showMenu(); break;
+        case "move": h.wake(); break;
+        case "wheel": h.setVolume(h.status.volume + (e.delta > 0 ? 5 : -5)); break;
+        case "drop": h.handleDropped(e.paths); break;
+      }
+    });
+    const unDrop = getCurrentWebview().onDragDropEvent((e) => {
+      const p = e.payload;
+      if (p.type === "enter" || p.type === "over") setDragOver(true);
+      else if (p.type === "leave") setDragOver(false);
+      else if (p.type === "drop") { setDragOver(false); handlers.current.handleDropped(p.paths); }
+    });
+    return () => { unSurface.then((f) => f()); unDrop.then((f) => f()); };
   }, []);
 
-  useEffect(() => {
-    if (status.state === "error") setError("The engine could not play this media.");
-  }, [status.state]);
-
-  // Drag & drop onto the window.
-  useEffect(() => {
-    const un = getCurrentWebview().onDragDropEvent((e) => {
-      if (e.payload.type === "drop" && e.payload.paths.length) openPath(e.payload.paths[0]);
-    });
-    return () => { un.then((f) => f()); };
-  }, [openPath]);
-
-  // Keep the native video surface glued to the reserved box.
+  // ---------- keep the native video surface glued to the reserved box ----------
+  const surfaceVisible = view === "player" && hasVideo && !urlOpen && !dragOver && !panelTakesOver;
+  const clipControls = fullscreen && controlsShown;
   useLayoutEffect(() => {
     const el = videoRef.current;
-    const visible = view === "player" && hasVideo && !!el;
-    if (!el) { engine.setVideoRect({ x: 0, y: 0, w: 0, h: 0, visible: false }); return; }
-    // Position can change without a resize (sidebar, banners, fonts), so compare
-    // every frame and only cross the IPC boundary when the rectangle moved.
+    if (!el || !surfaceVisible) { engine.setVideoRect({ x: 0, y: 0, w: 0, h: 0, visible: false }); return; }
     let last = "";
     let raf = 0;
     const sync = () => {
@@ -114,166 +446,303 @@ export default function App() {
       // also applies the Windows text-size setting on top of monitor DPI.
       const r = el.getBoundingClientRect();
       const k = window.devicePixelRatio;
-      const px = { x: Math.round(r.left * k), y: Math.round(r.top * k), w: Math.round(r.width * k), h: Math.round(r.height * k), visible };
+      // Fullscreen controls float over the bottom of the box: keep the video above them.
+      const bar = clipControls && transportRef.current ? transportRef.current.getBoundingClientRect().height : 0;
+      const px = { x: Math.round(r.left * k), y: Math.round(r.top * k), w: Math.round(r.width * k), h: Math.round((r.height - bar) * k), visible: true };
       const key = JSON.stringify(px);
-      if (key !== last) {
-        last = key;
-        engine.setVideoRect(px);
-      }
+      if (key !== last) { last = key; engine.setVideoRect(px); }
       raf = requestAnimationFrame(sync);
     };
     sync();
     return () => cancelAnimationFrame(raf);
-  }, [view, hasVideo]);
+  }, [surfaceVisible, clipControls]);
+  // Re-apply "stretch to window" when the box changes shape.
+  useEffect(() => {
+    if (aspect !== "fill" || !videoRef.current) return;
+    const ro = new ResizeObserver(() => {
+      const r = videoRef.current!.getBoundingClientRect();
+      engine.setAspectRatio(`${Math.round(r.width)}:${Math.round(r.height)}`);
+    });
+    ro.observe(videoRef.current);
+    return () => ro.disconnect();
+  }, [aspect, hasVideo]);
 
-  const togglePlay = useCallback(() => {
-    if (!opened) return void pickFile();
-    if (status.state === "stopped" || status.state === "ended") return void engine.play();
-    engine.setPaused(isPlaying);
-  }, [opened, status.state, isPlaying, pickFile]);
-
-  const seekBy = useCallback((d: number) => {
-    if (status.length_ms > 0) engine.seek(Math.min(status.length_ms, Math.max(0, status.time_ms + d)));
-  }, [status]);
-
+  // ---------- keyboard (VLC-style) ----------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement).closest("input, select, textarea")) return;
-      if (e.ctrlKey && e.key.toLowerCase() === "o") { e.preventDefault(); pickFile(); return; }
-      switch (e.key) {
-        case " ": e.preventDefault(); togglePlay(); break;
-        case "ArrowLeft": seekBy(e.shiftKey ? -30000 : -5000); break;
-        case "ArrowRight": seekBy(e.shiftKey ? 30000 : 5000); break;
-        case "ArrowUp": engine.setVolume(Math.min(200, status.volume + 5)); break;
-        case "ArrowDown": engine.setVolume(Math.max(0, status.volume - 5)); break;
-        case ".": engine.nextFrame(); break;
-        case "i": setShowInspector((v) => !v); break;
-        case "s": engine.stop(); break;
+      const tgt = e.target as HTMLElement;
+      if (tgt.closest("input[type=text], input[type=url], textarea, select")) return;
+      const k = e.key;
+      const ctrl = e.ctrlKey || e.metaKey;
+      wake();
+      if (ctrl && k.toLowerCase() === "o") { e.preventDefault(); e.shiftKey ? pickFolder() : pickFiles(); return; }
+      if (ctrl && k.toLowerCase() === "n") { e.preventDefault(); setUrlOpen(true); return; }
+      if (ctrl && k.toLowerCase() === "q") { e.preventDefault(); getCurrentWindow().close(); return; }
+      if (ctrl && k === "ArrowUp") { e.preventDefault(); setVolume(status.volume + 5); return; }
+      if (ctrl && k === "ArrowDown") { e.preventDefault(); setVolume(status.volume - 5); return; }
+      if (ctrl || e.altKey) return;
+      let handled = true;
+      switch (k) {
+        case " ": togglePlay(); break; // preventDefault below also stops a focused button re-firing
+        case "f": case "F": case "F11": toggleFullscreen(); break;
+        case "Escape": if (fullscreen) toggleFullscreen(false); else if (urlOpen) setUrlOpen(false); else handled = false; break;
+        case "ArrowLeft": seekBy(e.shiftKey ? -3000 : -10000); break;
+        case "ArrowRight": seekBy(e.shiftKey ? 3000 : 10000); break;
+        case "ArrowUp": setVolume(status.volume + 5); break;
+        case "ArrowDown": setVolume(status.volume - 5); break;
+        case "m": case "M": toggleMute(); break;
+        case "n": case "N": next(); break;
+        case "p": case "P": prev(); break;
+        case "s": act(engine.stop()); break;
+        case "S": snapshot(); break;
+        case "e": case ".": act(engine.nextFrame()); break;
+        case "[": case "-": stepRate(-1); break;
+        case "]": case "+": stepRate(1); break;
+        case "=": setRate(1); break;
+        case "j": delay("audio", -50); break;
+        case "k": delay("audio", 50); break;
+        case "g": delay("subtitle", -50); break;
+        case "h": delay("subtitle", 50); break;
+        case "b": cycleTrack("audio"); break;
+        case "v": cycleTrack("subtitle"); break;
+        case "a": applyAspect(ASPECTS[(ASPECTS.indexOf(aspect) + 1) % ASPECTS.length]); break;
+        case "l": case "L": setRepeat((r) => (r === "off" ? "all" : r === "all" ? "one" : "off")); break;
+        case "r": case "R": setShuffle((s) => !s); break;
+        case "i": case "I": openPanel("info"); break;
+        case "q": case "Q": openPanel("queue"); break;
+        case "t": case "T": openPanel("tune"); break;
+        case "Home": seekTo(0); break;
+        case "End": if (lengthMs) seekTo(lengthMs - 1000); break;
+        default:
+          if (/^[0-9]$/.test(k) && lengthMs) seekTo((Number(k) / 10) * lengthMs);
+          else handled = false;
       }
+      if (handled) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [togglePlay, seekBy, pickFile, status.volume]);
+  });
 
-  const title = meta?.title ?? (opened ? basename(opened.path) : "Nothing playing");
+  // ---------- splitters ----------
+  const startResize = (which: "side" | "panel") => (e: React.PointerEvent) => {
+    e.preventDefault();
+    const x0 = e.clientX;
+    const w0 = which === "side" ? sideW : panelW;
+    const move = (ev: PointerEvent) => {
+      const d = ev.clientX - x0;
+      if (which === "side") {
+        const w = w0 + d;
+        if (w < 120) setSideCollapsed(true);
+        else { setSideCollapsed(false); setSideW(clamp(w, 160, 360)); }
+      } else setPanelW(clamp(w0 - d, 260, Math.max(300, window.innerWidth * 0.6)));
+    };
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); document.body.classList.remove("resizing"); };
+    document.body.classList.add("resizing");
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  // ---------- render ----------
+  const title = meta?.title ?? (current ? basename(current) : "Nothing playing");
   const subtitle = [meta?.artist, meta?.album].filter(Boolean).join(" — ") ||
-    (opened?.probe?.format.format_long_name ?? "");
-  const art = meta?.artwork_url?.startsWith("file:///")
-    ? convertFileSrc(decodeURIComponent(meta.artwork_url.slice(8)))
-    : null;
-  const pos = scrub ?? status.time_ms;
-  const fill = status.length_ms ? `${(pos / status.length_ms) * 100}%` : "0%";
+    (opened?.probe?.format.format_long_name ?? (current && /:\/\//.test(current) ? "Network stream" : ""));
+  const art = meta?.artwork_url?.startsWith("file:///") ? convertFileSrc(decodeURIComponent(meta.artwork_url.slice(8))) : null;
   const engineMissing = diag && !diag.engine;
+  const repeatLabel = repeat === "one" ? "Repeat one" : repeat === "all" ? "Repeat all" : "Repeat off";
+  const effVolume = status.muted ? 0 : Math.max(0, status.volume);
 
   return (
-    <div className={`app${collapsed ? " collapsed" : ""}`}>
-      <nav className="sidebar" aria-label="Primary">
-        <div className="brand">
-          <button className="icon-btn" onClick={() => setCollapsed((c) => !c)} aria-label="Toggle sidebar"><Icon name="menu" /></button>
-          <span className="brand-name">Halcyon</span>
-        </div>
-        <button className="nav-item" aria-current={view === "player" ? "page" : undefined} onClick={() => setView("player")} title="Now playing">
-          <Icon name="disc" /><span className="nav-label">Now playing</span>
-        </button>
-        <div className="nav-sep" />
-        {NAV.map((n) => (
-          <button key={n.id} className="nav-item" disabled title={`${n.label} — planned for phase ${n.phase}`}>
-            <Icon name={n.icon} /><span className="nav-label">{n.label}</span><span className="soon">P{n.phase}</span>
-          </button>
-        ))}
-        <div className="spacer" />
-        <button className="nav-item" aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")} title="Settings">
-          <Icon name="settings" /><span className="nav-label">Settings</span>
-        </button>
-      </nav>
+    <div className={`app${fullscreen ? " fs" : ""}${fullscreen && !controlsShown ? " idle" : ""}`}
+      onPointerMove={fullscreen ? wake : undefined}>
+      <div className="body">
+        {!sidebarHidden && (
+          <>
+            <nav className={`sidebar${sidebarMini ? " mini" : ""}`} style={{ width: sidebarMini ? 56 : sideW }} aria-label="Primary">
+              <div className="brand">
+                <button className="icon-btn" onClick={() => setSideCollapsed((c) => !c)} aria-label="Toggle sidebar" title="Toggle sidebar"><Icon name="menu" /></button>
+                <span className="brand-name">Halcyon</span>
+              </div>
+              <button className="nav-item" aria-current={view === "player" ? "page" : undefined} onClick={() => setView("player")} title="Now playing">
+                <Icon name="disc" /><span className="nav-label">Now playing</span>
+              </button>
+              <button className="nav-item" onClick={pickFiles} title="Open files (Ctrl+O)"><Icon name="open" /><span className="nav-label">Open files</span></button>
+              <button className="nav-item" onClick={pickFolder} title="Open folder (Ctrl+Shift+O)"><Icon name="folder" /><span className="nav-label">Open folder</span></button>
+              <button className="nav-item" onClick={() => setUrlOpen(true)} title="Open network stream (Ctrl+N)"><Icon name="network" /><span className="nav-label">Network stream</span></button>
+              <div className="nav-sep" />
+              {NAV.map((n) => (
+                <button key={n.id} className="nav-item" disabled title={`${n.label} — planned for phase ${n.phase}`}>
+                  <Icon name={n.icon} /><span className="nav-label">{n.label}</span><span className="soon">P{n.phase}</span>
+                </button>
+              ))}
+              <div className="spacer" />
+              <button className="nav-item" aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")} title="Settings">
+                <Icon name="settings" /><span className="nav-label">Settings</span>
+              </button>
+            </nav>
+            {!sidebarMini && <div className="splitter" onPointerDown={startResize("side")} role="separator" aria-orientation="vertical" aria-label="Resize sidebar" />}
+          </>
+        )}
 
-      <main className="main">
-        {view === "player" ? (
-          <section className="stage">
-            {(error || engineMissing) && <div className="banner" role="alert">{error ?? diag?.engine_error}</div>}
-            {!opened ? (
+        {!panelTakesOver && (
+          <main className="stage">
+            {(error || engineMissing) && (
+              <div className="banner" role="alert">
+                <span>{error ?? diag?.engine_error}</span>
+                <button className="icon-btn" onClick={() => setError(null)} aria-label="Dismiss"><Icon name="close" /></button>
+              </div>
+            )}
+            {iamf && (
+              <div className="banner info" role="status">
+                Immersive audio (IAMF / Eclipsa) detected. libVLC 3 cannot decode or render it; inspection works, playback arrives with the Immersive Audio Lab.
+              </div>
+            )}
+            {view === "settings" ? (
+              <Settings diag={diag} />
+            ) : !opened ? (
               <div className="empty">
                 <h1>Play anything.</h1>
-                <p>Open a file or drop it here. Playback and inspection happen on this device.</p>
-                <button className="btn primary" onClick={pickFile}><Icon name="open" /> Open media</button>
-                <span className="hint"><span className="kbd">Ctrl O</span> open · <span className="kbd">Space</span> play/pause · <span className="kbd">I</span> inspector</span>
+                <p>Drop files, folders or playlists here — or open them. Everything stays on this device.</p>
+                <div className="row">
+                  <button className="btn primary" onClick={pickFiles}><Icon name="open" /> Open files</button>
+                  <button className="btn" onClick={pickFolder}><Icon name="folder" /> Folder</button>
+                  <button className="btn" onClick={() => setUrlOpen(true)}><Icon name="network" /> Stream URL</button>
+                </div>
+                {recents.length > 0 && (
+                  <div className="recents">
+                    <h2>Recent</h2>
+                    {recents.slice(0, 8).map((r) => (
+                      <button key={r} className="recent" onClick={() => playSources([r])} title={r}>
+                        <span className="recent-name">{basename(r)}</span><span className="recent-path">{r}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <span className="hint"><span className="kbd">Space</span> play · <span className="kbd">F</span> fullscreen · <span className="kbd">←/→</span> seek · <span className="kbd">Q</span> queue · <span className="kbd">I</span> info · right-click video for more</span>
               </div>
             ) : hasVideo ? (
-              <div className="video-box" ref={videoRef} onDoubleClick={togglePlay} />
+              <div className="video-box" ref={videoRef} onDoubleClick={() => toggleFullscreen()} onContextMenu={(e) => { e.preventDefault(); showMenu(); }}
+                onWheel={(e) => setVolume(status.volume + (e.deltaY < 0 ? 5 : -5))} />
             ) : (
-              <div className="audio-hero">
+              <div className="audio-hero" onContextMenu={(e) => { e.preventDefault(); showMenu(); }} onWheel={(e) => setVolume(status.volume + (e.deltaY < 0 ? 5 : -5))}>
                 {art ? <img className="art" src={art} alt="" /> : <div className="art"><Icon name="music" /></div>}
-                <div>
+                <div className="hero-text">
                   <h1>{title}</h1>
                   <div className="sub">{subtitle}</div>
                 </div>
               </div>
             )}
-          </section>
-        ) : (
-          <Settings diag={diag} />
+            {dragOver && <div className="drop-overlay"><Icon name="open" /><span>Drop to play · subtitles are added to the current video</span></div>}
+            {urlOpen && <UrlDialog onClose={() => setUrlOpen(false)} onOpen={(u) => { setUrlOpen(false); playSources([u]); }} />}
+          </main>
         )}
-        {view === "player" && showInspector && <Inspector opened={opened} meta={meta} diag={diag} />}
-      </main>
 
-      <footer className="transport">
-        <div className="now">
-          {art ? <img className="thumb" src={art} alt="" /> : <div className="thumb" />}
-          <div style={{ minWidth: 0 }}>
-            <div className="t" title={title}>{title}</div>
-            <div className="a">{subtitle || " "}</div>
+        {panelVisible && (
+          <>
+            {!tiny && <div className="splitter" onPointerDown={startResize("panel")} role="separator" aria-orientation="vertical" aria-label="Resize panel" />}
+            <aside className="panel" style={{ width: tiny ? "100%" : panelW }}>
+              <div className="tabs" role="tablist">
+                {(["queue", "info", "tune"] as PanelTab[]).map((t) => (
+                  <button key={t} role="tab" aria-selected={panel === t} className="tab" onClick={() => setPanel(t)}>
+                    {t === "queue" ? `Queue${queue.length ? ` · ${queue.length}` : ""}` : t === "info" ? "Info" : "Tune"}
+                  </button>
+                ))}
+                <span className="spacer" />
+                <button className="icon-btn" onClick={() => setPanel(null)} aria-label="Close panel"><Icon name="close" /></button>
+              </div>
+              <div className="panel-body">
+                {panel === "queue" && (
+                  <QueuePanel queue={queue} index={index}
+                    onPlay={(i) => loadIndex(i, queue)}
+                    onRemove={(i) => { setQueue((q) => q.filter((_, j) => j !== i)); if (i < index) setIndex(index - 1); }}
+                    onMove={(i, d) => {
+                      const j = i + d;
+                      if (j < 0 || j >= queue.length) return;
+                      setQueue((q) => { const c = [...q]; [c[i], c[j]] = [c[j], c[i]]; return c; });
+                      if (index === i) setIndex(j); else if (index === j) setIndex(i);
+                    }}
+                    onClear={() => { setQueue(current ? [current] : []); setIndex(current ? 0 : -1); }}
+                    onAdd={async () => {
+                      const f = await openDialog({ multiple: true, filters: [{ name: "Media & playlists", extensions: MEDIA_EXT }] });
+                      if (Array.isArray(f) && f.length) playSources(f, true);
+                    }} />
+                )}
+                {panel === "info" && <Inspector opened={opened} meta={meta} diag={diag} stats={stats} videoSize={videoSize} status={status} />}
+                {panel === "tune" && (
+                  <TunePanel status={status} aspect={aspect} deinterlace={deinterlace} hasVideo={hasVideo}
+                    onDelay={delay} onRate={setRate} onAspect={applyAspect} onDeinterlace={applyDeinterlace}
+                    onAddSubtitle={pickSubtitle} onSnapshot={snapshot}
+                    onChapter={(c) => act(engine.setChapter(c))} />
+                )}
+              </div>
+            </aside>
+          </>
+        )}
+      </div>
+
+      <footer className={`transport${fullscreen && !controlsShown ? " hidden" : ""}`} ref={transportRef}
+        onPointerEnter={() => { overTransport.current = true; }} onPointerLeave={() => { overTransport.current = false; wake(); }}>
+        <SeekBar status={viewStatus} receivedAt={receivedAt} onSeek={seekTo} chapters={chapters} />
+        <div className="controls">
+          <div className="now">
+            {art ? <img className="thumb" src={art} alt="" /> : <div className="thumb"><Icon name={hasVideo ? "video" : "music"} /></div>}
+            <div className="now-text">
+              <div className="t" title={current ?? undefined}>{title}</div>
+              <div className="a">{toast ? (
+                <span className="toast" role="status">{toast.text}{toast.action && <button className="link" onClick={() => { toast.action!.run(); setToast(null); }}>{toast.action.label}</button>}</span>
+              ) : (subtitle || " ")}</div>
+            </div>
           </div>
-        </div>
 
-        <div className="center">
           <div className="buttons">
-            <button className="icon-btn" onClick={() => seekBy(-10000)} disabled={!opened} aria-label="Back 10 seconds" title="Back 10 s (←)"><Icon name="back" /></button>
-            <button className="icon-btn" onClick={() => engine.stop()} disabled={!opened} aria-label="Stop" title="Stop (S)"><Icon name="stop" filled /></button>
-            <button className="icon-btn play" onClick={togglePlay} aria-label={isPlaying ? "Pause" : "Play"} title="Play/pause (Space)">
-              <Icon name={isPlaying ? "pause" : "play"} filled />
+            <button className="icon-btn hide-xs" onClick={() => setShuffle((s) => !s)} aria-pressed={shuffle} aria-label="Shuffle" title="Shuffle (R)"><Icon name="shuffle" /></button>
+            <button className="icon-btn" onClick={prev} disabled={!opened} aria-label="Previous" title="Previous / restart (P)"><Icon name="prev" filled /></button>
+            <button className="icon-btn hide-xs" onClick={() => seekBy(-10000)} disabled={!opened} aria-label="Back 10 seconds" title="Back 10 s (←)"><Icon name="back" /></button>
+            <button className="icon-btn play" onClick={togglePlay} aria-label={playing ? "Pause" : "Play"} title="Play / pause (Space)">
+              <Icon name={playing ? "pause" : "play"} filled />
             </button>
-            <button className="icon-btn" onClick={() => engine.nextFrame()} disabled={!hasVideo} aria-label="Next frame" title="Next frame (.)"><Icon name="step" /></button>
-            <button className="icon-btn" onClick={() => seekBy(10000)} disabled={!opened} aria-label="Forward 10 seconds" title="Forward 10 s (→)"><Icon name="fwd" /></button>
+            <button className="icon-btn hide-xs" onClick={() => seekBy(10000)} disabled={!opened} aria-label="Forward 10 seconds" title="Forward 10 s (→)"><Icon name="fwd" /></button>
+            <button className="icon-btn" onClick={next} disabled={queue.length < 2 && repeat !== "all"} aria-label="Next" title="Next (N)"><Icon name="next" filled /></button>
+            <button className="icon-btn hide-xs" onClick={() => setRepeat((r) => (r === "off" ? "all" : r === "all" ? "one" : "off"))} aria-pressed={repeat !== "off"} aria-label={repeatLabel} title={`${repeatLabel} (L)`}>
+              <Icon name={repeat === "one" ? "repeat1" : "repeat"} />
+            </button>
           </div>
-          <div className="seek">
-            <span>{formatTime(pos)}</span>
-            <input type="range" aria-label="Seek" min={0} max={status.length_ms || 1} step={100} value={pos}
-              disabled={!status.length_ms} style={{ ["--fill" as string]: fill }}
-              onChange={(e) => setScrub(Number(e.target.value))}
-              onPointerUp={(e) => { engine.seek(Number((e.target as HTMLInputElement).value)); setScrub(null); }}
-              onKeyUp={(e) => { engine.seek(Number((e.target as HTMLInputElement).value)); setScrub(null); }} />
-            <span>{status.length_ms ? formatTime(status.length_ms) : "--:--"}</span>
-          </div>
-        </div>
 
-        <div className="right">
-          <select className="select" aria-label="Playback speed" value={RATES.includes(Number(status.rate.toFixed(2))) ? Number(status.rate.toFixed(2)) : 1}
-            onChange={(e) => engine.setRate(Number(e.target.value)).catch((x) => setError(String(x)))} disabled={!opened}>
-            {RATES.map((r) => <option key={r} value={r}>{r}×</option>)}
-          </select>
-          {tracks && tracks.audio.length > 2 && (
-            <select className="select" aria-label="Audio track" value={tracks.current_audio}
-              onChange={(e) => engine.setAudioTrack(Number(e.target.value)).then(refreshDetails)}>
-              {tracks.audio.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
-          )}
-          {tracks && tracks.subtitle.length > 0 && (
-            <select className="select" aria-label="Subtitles" value={tracks.current_subtitle}
-              onChange={(e) => engine.setSubtitleTrack(Number(e.target.value)).then(refreshDetails)}>
-              {tracks.subtitle.map((t) => <option key={t.id} value={t.id}>{t.id === -1 ? "Subtitles off" : t.name}</option>)}
-            </select>
-          )}
-          <button className="icon-btn" onClick={() => engine.setVolume(status.volume > 0 ? 0 : 100)} aria-label="Mute" title="Mute">
-            <Icon name={status.volume > 0 ? "volume" : "mute"} />
-          </button>
-          <input className="volume" type="range" aria-label="Volume" min={0} max={125} value={Math.max(0, status.volume)}
-            style={{ ["--fill" as string]: `${(Math.max(0, status.volume) / 125) * 100}%` }}
-            onChange={(e) => engine.setVolume(Number(e.target.value))} />
-          <button className="icon-btn" onClick={() => setShowInspector((v) => !v)} aria-pressed={showInspector} aria-label="Inspector" title="Inspector (I)">
-            <Icon name="panel" />
-          </button>
+          <div className="right">
+            <button className="chip hide-sm" onClick={() => setRate(status.rate === 1 ? 1.5 : 1)} title="Speed — [ ] to step, = to reset" disabled={!opened}>{Number(status.rate.toFixed(2))}×</button>
+            <button className="icon-btn" onClick={toggleMute} aria-pressed={status.muted} aria-label={status.muted ? "Unmute" : "Mute"} title="Mute (M)">
+              <Icon name={effVolume === 0 ? "mute" : "volume"} />
+            </button>
+            <input className="volume hide-sm" type="range" aria-label="Volume" min={0} max={150} value={Math.min(150, effVolume)}
+              style={{ ["--fill" as string]: `${(Math.min(150, effVolume) / 150) * 100}%` }}
+              onChange={(e) => setVolume(Number(e.target.value))}
+              onWheel={(e) => setVolume(status.volume + (e.deltaY < 0 ? 5 : -5))} title={`${effVolume}%`} />
+            <button className="icon-btn" onClick={() => openPanel("queue")} aria-pressed={panel === "queue"} aria-label="Queue" title="Queue (Q)"><Icon name="list" /></button>
+            <button className="icon-btn hide-xs" onClick={() => openPanel("info")} aria-pressed={panel === "info"} aria-label="Media info" title="Media info (I)"><Icon name="panel" /></button>
+            <button className="icon-btn" onClick={() => toggleFullscreen()} aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"} title="Fullscreen (F, double-click)">
+              <Icon name={fullscreen ? "unfull" : "full"} />
+            </button>
+          </div>
         </div>
       </footer>
+    </div>
+  );
+}
+
+function UrlDialog({ onOpen, onClose }: { onOpen: (u: string) => void; onClose: () => void }) {
+  const [v, setV] = useState("");
+  const ok = /^(https?|rtsp|rtp|udp|mms|ftp|sftp|smb|nfs|srt):\/\//i.test(v.trim());
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <form className="modal" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); if (ok) onOpen(v.trim()); }}>
+        <h2>Open network stream</h2>
+        <p className="muted">HTTP(S), HLS (.m3u8), DASH (.mpd), RTSP, RTP/UDP, SMB, FTP/SFTP. The address is passed to the engine as-is.</p>
+        <input autoFocus type="url" className="input" placeholder="https://example.com/live/stream.m3u8" value={v} onChange={(e) => setV(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Escape") onClose(); }} />
+        <div className="row end">
+          <button type="button" className="btn" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn primary" disabled={!ok}>Play</button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -282,7 +751,7 @@ function Settings({ diag }: { diag: Diagnostics | null }) {
   return (
     <section className="page">
       <h1>Engine & compatibility</h1>
-      <div className="inspector" style={{ width: "auto", border: 0, padding: 0, background: "none" }}>
+      <div className="inspector flat">
         <h2>Playback engine</h2>
         <dl className="kv">
           <dt>Engine</dt><dd>{diag?.engine ? `${diag.engine.name} ${diag.engine.version}` : "Not loaded"}</dd>
@@ -290,12 +759,18 @@ function Settings({ diag }: { diag: Diagnostics | null }) {
           {diag?.engine_error && (<><dt>Error</dt><dd>{diag.engine_error}</dd></>)}
         </dl>
         <h2>Inspection</h2>
+        <dl className="kv"><dt>ffprobe</dt><dd>{diag?.ffprobe ?? "Not found on PATH"}</dd></dl>
+        <h2>Keyboard</h2>
         <dl className="kv">
-          <dt>ffprobe</dt><dd>{diag?.ffprobe ?? "Not found on PATH"}</dd>
+          {[
+            ["Space", "Play / pause"], ["F, F11, double-click", "Fullscreen"], ["Esc", "Leave fullscreen"],
+            ["← / →", "Seek 10 s (Shift: 3 s)"], ["↑ / ↓, wheel", "Volume"], ["M", "Mute"], ["N / P", "Next / previous"],
+            ["[ ] =", "Speed down / up / reset"], [". or E", "Next frame"], ["J / K", "Audio delay −/+ 50 ms"],
+            ["G / H", "Subtitle delay −/+ 50 ms"], ["B / V", "Cycle audio / subtitle track"], ["A", "Cycle aspect ratio"],
+            ["L / R", "Repeat / shuffle"], ["0–9", "Jump to 0–90 %"], ["Shift+S", "Snapshot"], ["Q / I / T", "Queue / info / tune panel"],
+            ["Ctrl+O, Ctrl+Shift+O, Ctrl+N", "Open files / folder / stream"],
+          ].map(([k, v]) => (<Fragment key={k}><dt>{k}</dt><dd>{v}</dd></Fragment>))}
         </dl>
-        <p className="muted" style={{ marginTop: 24 }}>
-          Decoder, plugin and hardware-acceleration listings are planned for phase 3 (see FEATURE_MATRIX.md).
-        </p>
       </div>
     </section>
   );

@@ -9,14 +9,30 @@ Immersive Audio Lab for IAMF inspection and rendering (planned), and a restraine
 
 ## What works today (verified)
 
-- Open a local file (dialog, drag & drop, or command-line argument / "Open with").
-- Identify container and every stream (codec, profile, resolution, frame rate, pixel format,
-  HDR transfer, sample rate, channels, layout, bitrate) via an **out-of-process** ffprobe.
-- Native playback through **libVLC 3.0.x**, rendered into a native child window (Direct3D11) inside the app.
-- Play / pause / stop / seek / ±10 s / frame step / speed / volume / mute.
-- Audio-track and subtitle-track selection (embedded tracks).
-- Real tag metadata (title, artist, album, genre, date, artwork when the file carries it).
-- Keyboard: `Space` play/pause · `←/→` ±5 s (`Shift` ±30 s) · `↑/↓` volume · `.` next frame · `S` stop · `I` inspector · `Ctrl+O` open.
+- **Open anything:** files, folders (recursive), M3U/M3U8/PLS/XSPF playlists, network URLs
+  (HTTP/HLS/DASH/RTSP/…), command-line arguments; drag & drop onto the window *or* onto the video.
+  Dropping subtitle files onto a playing video attaches them.
+- **Playback:** play/pause/stop, precise seek bar (hover preview, chapter ticks, drag anywhere),
+  ±10 s/±3 s, frame step, speed 0.25–4×, volume up to 200 %, mute, chapters, restart after end.
+- **Queue:** next/previous, auto-advance, repeat off/all/one, shuffle, reorder, resume position for long
+  media, recent files.
+- **Tracks & sync:** audio/subtitle track switching, external SRT/ASS/VTT, audio and subtitle delay.
+- **Picture:** fullscreen (F / double-click, auto-hiding controls, hidden cursor), aspect ratio incl.
+  stretch-to-window, deinterlace modes, PNG snapshots (Pictures/Halcyon).
+- **Layout:** resizable sidebar and side panel, collapsible sidebar, works down to 420 × 300 like VLC.
+- **Inspection:** container + every stream via out-of-process ffprobe, HDR10/HLG/Dolby/DTS/hi-res
+  badges, IAMF stream groups, live decoder statistics (decoded/lost frames, bitrate).
+- **Native right-click menu** over the video (speed, tracks, subtitles, aspect, deinterlace, snapshot, open…).
+
+Measured support for 78 formats (including 4K/8K, HDR, Dolby, DTS, hi-res audio and IAMF) is in
+[FEATURE_MATRIX.md](FEATURE_MATRIX.md); the full machine-generated run is `test-media/STRESS_REPORT.md`.
+
+### Keyboard (VLC-style)
+
+`Space` play/pause · `F`/`F11`/double-click fullscreen · `Esc` leave · `←/→` ±10 s (`Shift` ±3 s) ·
+`↑/↓`/wheel volume · `M` mute · `N/P` next/previous · `[ ] =` speed · `.` frame · `J/K` audio delay ·
+`G/H` subtitle delay · `B/V` cycle audio/subtitle · `A` aspect · `L` repeat · `R` shuffle · `0–9` jump ·
+`Shift+S` snapshot · `Q/I/T` queue/info/tune · `Ctrl+O` files · `Ctrl+Shift+O` folder · `Ctrl+N` stream.
 
 ## Requirements (development, Windows 10/11 x64)
 
@@ -47,10 +63,21 @@ bash scripts/make-test-media.sh
 ```
 
 ```bash
-cd src-tauri && cargo test
+cd src-tauri && cargo test --lib
 ```
 
-The engine tests play real generated media headlessly (VLC dummy audio/video outputs). See [TESTING.md](TESTING.md).
+Full stress suite (78 formats, damaged files, engine torture; ~5 min):
+
+```bash
+bash scripts/make-stress-media.sh
+```
+
+```bash
+cd src-tauri && cargo test --lib stress -- --ignored --nocapture --test-threads=1
+```
+
+Put your own real-world files (Dolby Atmos, Dolby Vision, Eclipsa/IAMF exports, …) in
+`test-media/corpus/` and the stress suite plays them too. See [TESTING.md](TESTING.md).
 
 ## Documents
 

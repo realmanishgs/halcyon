@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [
-      { "title": "Halcyon", "width": 1200, "height": 720, "minWidth": 720, "minHeight": 480, "center": true }
+      { "title": "Halcyon", "width": 1200, "height": 720, "minWidth": 420, "minHeight": 300, "center": true }
     ],
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost",
