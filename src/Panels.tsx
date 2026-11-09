@@ -131,7 +131,7 @@ export function AudioPanel(p: {
       </div>
       <div className={`eq${p.eq.enabled ? "" : " off"}`}>
         <div className="eq-band">
-          <input type="range" min={-20} max={20} step={0.5} value={p.eq.preamp} aria-label="Preamp"
+          <input type="range" min={-20} max={8} step={0.5} value={p.eq.preamp} aria-label="Preamp"
             onChange={(e) => set({ preamp: Number(e.target.value), preset: "Custom" })} />
           <span className="eq-v">{p.eq.preamp > 0 ? "+" : ""}{p.eq.preamp.toFixed(1)}</span><span className="eq-f">pre</span>
         </div>

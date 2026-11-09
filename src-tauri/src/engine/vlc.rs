@@ -37,6 +37,10 @@ const STATE_ERROR: c_int = 7;
 
 const SLAVE_SUBTITLE: c_int = 0; // libvlc_media_slave_type_subtitle
 
+/// libVLC's equalizer attenuates by 12 dB; a preamp of +12 dB is level-neutral (measured: flat
+/// bands at preamp 12 give the same output level as no equalizer, preamp 0 gives -12 dB).
+const EQ_UNITY_PREAMP_DB: f32 = 12.0;
+
 // libvlc_video_adjust_option_t
 const ADJUST_ENABLE: c_uint = 0;
 const ADJUST_CONTRAST: c_uint = 1;
@@ -858,7 +862,7 @@ impl MediaEngine for VlcEngine {
                         return None;
                     }
                     let eq = Equalizer {
-                        preamp: (self.api.libvlc_audio_equalizer_get_preamp)(e),
+                        preamp: (self.api.libvlc_audio_equalizer_get_preamp)(e) - EQ_UNITY_PREAMP_DB,
                         bands: (0..n).map(|b| (self.api.libvlc_audio_equalizer_get_amp_at_index)(e, b)).collect(),
                     };
                     (self.api.libvlc_audio_equalizer_release)(e);
@@ -880,7 +884,8 @@ impl MediaEngine for VlcEngine {
             if e.is_null() {
                 return Err("Equalizer unavailable".into());
             }
-            (self.api.libvlc_audio_equalizer_set_preamp)(e, eq.preamp.clamp(-20.0, 20.0));
+            // Halcyon preamp 0 = same loudness as the equalizer off (libVLC needs +12 dB for that).
+            (self.api.libvlc_audio_equalizer_set_preamp)(e, (eq.preamp + EQ_UNITY_PREAMP_DB).clamp(-20.0, 20.0));
             for (i, g) in eq.bands.iter().enumerate() {
                 (self.api.libvlc_audio_equalizer_set_amp_at_index)(e, g.clamp(-20.0, 20.0), i as c_uint);
             }

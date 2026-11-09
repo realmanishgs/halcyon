@@ -445,3 +445,34 @@ ADJ restart {after_restart:?} dark {changed_while_rotated:?} reset {reset:?}");
     assert!(after_restart.0 < 10.0, "adjustment lost across the engine restart: {after_restart:?}");
     assert!(changed_while_rotated.0 > 60.0 && changed_while_rotated.1 < reset.1 - 20.0, "darkening while rotated: {changed_while_rotated:?} vs {reset:?}");
 }
+
+/// Mean level (dBFS) of a WAV file, via FFmpeg's volumedetect.
+fn mean_db(wav: &std::path::Path) -> f64 {
+    let o = probe::quiet(probe::ffmpeg_path().unwrap()).args(["-hide_banner", "-i"]).arg(wav).args(["-af", "volumedetect", "-f", "null", "-"]).output().unwrap();
+    let t = String::from_utf8_lossy(&o.stderr);
+    let i = t.find("mean_volume:").expect("volumedetect output") + 12;
+    t[i..].split_whitespace().next().unwrap().parse().unwrap()
+}
+
+#[test]
+fn flat_equalizer_keeps_the_volume() {
+    // Regression: switching the EQ on at "Flat"/preamp 0 dropped the level by 12 dB.
+    if probe::ffmpeg_path().is_none() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("halcyon-eq-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut levels = Vec::new();
+    for (name, eq) in [("off", None), ("flat", Some(Equalizer { preamp: 0.0, bands: vec![0.0; 10] }))] {
+        let out = dir.join(format!("{name}.wav"));
+        let arg = format!("--audiofile-file={}", out.display());
+        let mut e = VlcEngine::load_with_args(&["--aout=afile", &arg, "--audiofile-format=s16", "--vout=vdummy"]).unwrap();
+        e.set_equalizer(eq.as_ref()).unwrap();
+        e.open(&media("tagged.flac"), None).unwrap();
+        wait_for(&e, |s| s.state == PlaybackState::Playing && s.time_ms > 2500, 10);
+        drop(e); // closes the WAV
+        levels.push(mean_db(&out));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!((levels[0] - levels[1]).abs() < 0.5, "EQ off {:.1} dB vs flat EQ {:.1} dB", levels[0], levels[1]);
+}

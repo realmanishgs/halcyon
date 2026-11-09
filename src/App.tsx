@@ -92,7 +92,7 @@ export default function App() {
   const [recents, setRecents] = useState<string[]>(() => store.get("recents", []));
   const [cfg, setCfg] = useState<EngineConfig>(DEFAULT_CONFIG);
   const [eqInfo, setEqInfo] = useState<EqualizerInfo | null>(null);
-  const [eq, setEq] = useState<EqState>(() => store.get("eq", FLAT_EQ(10)));
+  const [eq, setEq] = useState<EqState>(() => store.get("equalizer", FLAT_EQ(10)));
   const [labGain, setLabGain] = useState(0);
   const [adjust, setAdjust] = useState<VideoAdjust | null>(null);
   const [crop, setCrop] = useState<string | null>(null);
@@ -146,7 +146,7 @@ export default function App() {
   useEffect(() => store.set("panelW", panelW), [panelW]);
   useEffect(() => store.set("sideW", sideW), [sideW]);
   useEffect(() => store.set("sideCollapsed", sideCollapsed), [sideCollapsed]);
-  useEffect(() => store.set("eq", eq), [eq]);
+  useEffect(() => store.set("equalizer", eq), [eq]);
   useEffect(() => store.set("theme", theme), [theme]);
   useEffect(() => store.set("accent", accent), [accent]);
   useEffect(() => store.set("private", privateMode), [privateMode]);
@@ -472,8 +472,7 @@ export default function App() {
       const k = await w.scaleFactor();
       store.set("normalSize", [sz.width / k, sz.height / k]);
       if (fullscreen) { await w.setFullscreen(false); setFullscreen(false); }
-      await w.setMinSize(new LogicalSize(320, 100));
-      await w.setSize(new LogicalSize(420, hasVideo ? 300 : 88));
+      await w.setMinSize(new LogicalSize(320, 60));
       await w.setAlwaysOnTop(true);
       setPanel(null);
     } else {
@@ -483,7 +482,16 @@ export default function App() {
       await w.setMinSize(new LogicalSize(420, 300));
     }
     setMini(nextMini);
-  }, [mini, fullscreen, hasVideo]);
+  }, [mini, fullscreen]);
+  // Size the mini player to its content: the control bar (plus a 16:9 picture for video).
+  useEffect(() => {
+    if (!mini) return;
+    const raf = requestAnimationFrame(() => {
+      const bar = transportRef.current?.offsetHeight ?? 88;
+      getCurrentWindow().setSize(new LogicalSize(420, bar + (hasVideo ? Math.round(420 * 9 / 16) : 0))).catch(() => {});
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [mini, hasVideo]);
   const actions: PlayActions = useMemo(() => ({
     play: (items: string[], start = 0) => { if (!items.length) return; setQueue(items); loadIndex(start, items); },
     enqueue: (items: string[]) => {
@@ -731,7 +739,7 @@ export default function App() {
   const effVolume = status.muted ? 0 : Math.max(0, status.volume);
 
   return (
-    <div className={`app${fullscreen ? " fs" : ""}${fullscreen && !controlsShown ? " idle" : ""}${mini && !hasVideo ? " mini-audio" : ""}`}
+    <div className={`app${fullscreen ? " fs" : ""}${fullscreen && !controlsShown ? " idle" : ""}${mini ? " mini" : ""}${mini && !hasVideo ? " mini-audio" : ""}`}
       // WebView2 fires synthetic zero-movement pointermoves after layout changes (e.g. the
       // controls hiding); only real movement may reveal them again.
       onPointerMove={fullscreen ? (e) => { if (e.movementX || e.movementY) wake(); } : undefined}>
@@ -817,9 +825,9 @@ export default function App() {
               <div className="video-box" ref={videoRef} onDoubleClick={() => toggleFullscreen()} onContextMenu={(e) => { e.preventDefault(); showMenu(); }}
                 onWheel={(e) => setVolume(status.volume + (e.deltaY < 0 ? 5 : -5))} />
             ) : (
-              <div className="audio-hero" onContextMenu={(e) => { e.preventDefault(); showMenu(); }} onWheel={(e) => setVolume(status.volume + (e.deltaY < 0 ? 5 : -5))}>
+              <div className={"audio-hero" + (lyrics ? " with-lyrics" : "")} onContextMenu={(e) => { e.preventDefault(); showMenu(); }} onWheel={(e) => setVolume(status.volume + (e.deltaY < 0 ? 5 : -5))}>
                 {art ? <img className="art" src={art} alt="" /> : <div className="art"><Icon name="music" /></div>}
-                <div className="hero-text">
+                <div className={"hero-text" + (lyrics ? " has-lyrics" : "")}>
                   <h1>{title}</h1>
                   <div className="sub">{subtitle}</div>
                   {lyrics && <LyricsView lyrics={lyrics} timeMs={status.time_ms} onSeek={seekTo} />}
@@ -927,11 +935,20 @@ export default function App() {
               style={{ ["--fill" as string]: `${(Math.min(150, effVolume) / 150) * 100}%` }}
               onChange={(e) => setVolume(Number(e.target.value))}
               onWheel={(e) => setVolume(status.volume + (e.deltaY < 0 ? 5 : -5))} title={`${effVolume}%`} />
-            <button className="icon-btn" onClick={() => openPanel("queue")} aria-pressed={panel === "queue"} aria-label="Queue" title="Queue (Q)"><Icon name="list" /></button>
-            <button className="icon-btn hide-xs" onClick={() => openPanel("info")} aria-pressed={panel === "info"} aria-label="Media info" title="Media info (I)"><Icon name="panel" /></button>
-            <button className="icon-btn" onClick={() => toggleFullscreen()} aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"} title="Fullscreen (F, double-click)">
-              <Icon name={fullscreen ? "unfull" : "full"} />
-            </button>
+            {mini ? (
+              <button className="icon-btn" onClick={() => toggleMini(false)} aria-label="Leave mini player" title="Back to full window (Esc)">
+                <Icon name="expand" />
+              </button>
+            ) : (
+              <>
+                <button className="icon-btn" onClick={() => openPanel("queue")} aria-pressed={panel === "queue"} aria-label="Queue" title="Queue (Q)"><Icon name="list" /></button>
+                <button className="icon-btn hide-xs" onClick={() => openPanel("info")} aria-pressed={panel === "info"} aria-label="Media info" title="Media info (I)"><Icon name="panel" /></button>
+                <button className="icon-btn hide-xs" onClick={() => toggleMini(true)} aria-label="Mini player" title="Mini player (always on top)"><Icon name="mini" /></button>
+                <button className="icon-btn" onClick={() => toggleFullscreen()} aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"} title="Fullscreen (F, double-click)">
+                  <Icon name={fullscreen ? "unfull" : "full"} />
+                </button>
+              </>
+            )}
           </div>
         </div>
       </footer>
@@ -964,7 +981,12 @@ function LyricsView({ lyrics, timeMs, onSeek }: { lyrics: Lyrics; timeMs: number
   for (let i = 0; i < lyrics.synced.length && lyrics.synced[i][0] <= timeMs + 150; i++) idx = i;
   useEffect(() => {
     const el = ref.current?.querySelector<HTMLElement>(".ly.on");
-    if (el && ref.current) ref.current.scrollTo({ top: el.offsetTop - ref.current.clientHeight / 2 + el.clientHeight / 2, behavior: "smooth" });
+    const box = ref.current;
+    if (!el || !box) return;
+    // Centre the current line inside the lyrics box (offsetTop is relative to the page
+    // layout, not the box, which scrolled the current line out of view).
+    const top = el.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
+    box.scrollTo({ top: top - box.clientHeight / 2 + el.clientHeight / 2, behavior: "smooth" });
   }, [idx]);
   return (
     <div className="lyrics" ref={ref} aria-label={"Lyrics (" + lyrics.source + ")"}>

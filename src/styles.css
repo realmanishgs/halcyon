@@ -338,3 +338,22 @@ input[type="color"] { width: 32px; height: 26px; border: 1px solid var(--border)
 
 /* Mini player with audio: only the control bar. */
 .app.mini-audio .body { display: none; }
+
+/* Audio with lyrics: title stays visible, only the lyrics list scrolls. */
+.audio-hero.with-lyrics { flex-wrap: nowrap; align-items: stretch; }
+.audio-hero.with-lyrics .art { align-self: center; width: clamp(96px, min(28vw, 36vh), 320px); }
+.hero-text.has-lyrics { display: flex; flex-direction: column; justify-content: center; min-height: 0; min-width: 0; flex: 1; }
+.hero-text.has-lyrics h1, .hero-text.has-lyrics .sub { flex: none; }
+.hero-text.has-lyrics .lyrics { flex: 0 1 auto; min-height: 0; max-height: none; }
+@media (max-width: 600px) { .audio-hero.with-lyrics .art { display: none; } }
+
+/* Mini player: artwork, title/artist, prev/play/next, volume, expand. */
+.app.mini .transport { padding: 6px 10px 8px; }
+.app.mini .controls { grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; }
+.app.mini .now .thumb { display: grid; width: 36px; height: 36px; }
+.app.mini .now .a { display: block; }
+.app.mini .buttons .hide-xs, .app.mini .right .chip, .app.mini .right .volume, .app.mini .right .hide-xs { display: none !important; }
+.app.mini .icon-btn.play { width: 34px; height: 34px; }
+.app.mini .time { min-width: 34px; }
+.lyrics { scrollbar-width: none; }
+.lyrics::-webkit-scrollbar { display: none; }

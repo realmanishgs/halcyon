@@ -35,6 +35,8 @@ const paths: Record<string, string> = {
   down: "M7 10l5 5 5-5",
   minus: "M6 12h12",
   plus: "M6 12h12M12 6v12",
+  mini: "M4 5h16v14H4zM12 12h6v5h-6z",
+  expand: "M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7",
   convert: "M5 8h11l-3-3M19 16H8l3 3",
   camera: "M4 8h3l1.5-2h7L17 8h3v11H4zM12 10.5a3 3 0 100 6 3 3 0 000-6z",
 };
