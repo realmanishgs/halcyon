@@ -247,7 +247,9 @@ pub fn parse_lrc(text: &str) -> Vec<(i64, String)> {
             }
             let Some((m, s)) = tag.split_once(':') else { continue };
             let (Ok(m), Ok(s)) = (m.trim().parse::<i64>(), s.trim().replace(':', ".").parse::<f64>()) else { continue };
-            stamps.push(m * 60_000 + (s * 1000.0).round() as i64);
+            // Untrusted numbers: checked arithmetic (found by fuzz::lrc_parser_never_panics).
+            let Some(ms) = m.checked_mul(60_000).and_then(|v| v.checked_add((s * 1000.0).round() as i64)) else { continue };
+            stamps.push(ms);
         }
         for t in stamps {
             out.push((t, rest.trim().to_string()));
@@ -255,7 +257,7 @@ pub fn parse_lrc(text: &str) -> Vec<(i64, String)> {
     }
     // A positive offset shows lyrics earlier.
     for (t, _) in out.iter_mut() {
-        *t = (*t - offset).max(0);
+        *t = t.saturating_sub(offset).max(0);
     }
     out.sort_by_key(|(t, _)| *t);
     out

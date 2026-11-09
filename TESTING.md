@@ -89,7 +89,7 @@ covering the control bar (a window region can't clip libVLC's D3D11 swapchain).
 
 ## 5. Phases 2–7 (recorded 2026-11-09)
 
-`cd src-tauri && cargo test --release --lib -- --test-threads=4` → **52 passed, 0 failed** (stress suite ignored); stable over repeated runs. Two engine tests open a small
+`cd src-tauri && cargo test --release --lib -- --test-threads=4` → **52 passed, 0 failed** (stress suite ignored); stable over repeated runs, and with `--config 'profile.release.package.halcyon.overflow-checks=true'`. Two engine tests open a small
 real video window briefly (rotation and visualisers), because the dummy output hides the problems they guard against.
 New since the format work:
 
@@ -100,7 +100,7 @@ New since the format work:
 | Library | tag extraction (container + stream tags), attached pictures, LRC parsing, M3U8/XSPF export round trip |
 | Audio Lab | EBU reference sine (−23.0 LUFS ±0.1), 5.1 dynamic material vs FFmpeg `ebur128` (I ±0.2 LU, LRA ±0.6 LU, TP ±0.3 dB), inter-sample peaks, clipping + silence detection |
 | Conversion | every preset on real media (duration and stream types checked), argument building, cancel removes partial output |
-| Robustness | `src/fuzz.rs`: playlists (text and on disk), LRC, ffprobe JSON + tag extraction, smart-rule SQL — fixed seeds, ~100 k inputs. **Found:** a panic decoding `%` followed by a multi-byte character in playlist URLs (fixed, regression test added) |
+| Robustness | `src/fuzz.rs`: playlists (text and on disk), LRC, ffprobe JSON + tag extraction, smart-rule SQL — fixed seeds, ~100 k inputs, also run with integer-overflow checks. **Found:** a panic decoding `%` followed by a multi-byte character in playlist URLs, and an integer overflow on huge LRC timestamps (both fixed) |
 
 Bugs found in this round and fixed: libVLC 3 ignores `--avcodec-hw` passed to the instance (now a media
 option, verified from the log); rotation cannot use GPU frames (now forces software decoding) and froze the picture on the Direct3D11
