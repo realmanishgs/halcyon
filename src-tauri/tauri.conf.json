@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Halcyon",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "app.halcyon.player",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -36,7 +36,7 @@
     "publisher": "Halcyon",
     "category": "Video",
     "shortDescription": "Local-first universal media player",
-    "longDescription": "Halcyon plays local and network media through libVLC, with an out-of-process media inspector. It needs VLC 3.x installed (or bundled next to the executable as ./vlc).",
+    "longDescription": "Halcyon plays local and network media through libVLC, with an out-of-process media inspector. The Windows and macOS installers include libVLC and FFmpeg.",
     "copyright": "Halcyon contributors",
     "icon": [
       "icons/32x32.png",

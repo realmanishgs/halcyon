@@ -289,9 +289,13 @@ fn candidate_dirs() -> Vec<PathBuf> {
     if let Ok(d) = std::env::var("HALCYON_LIBVLC_DIR") {
         v.push(PathBuf::from(d));
     }
+    // Copy bundled by the installer: next to the exe on Windows (Tauri resources live in
+    // the install folder), in Contents/Resources on macOS.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(d) = exe.parent() {
             v.push(d.join("vlc"));
+            #[cfg(target_os = "macos")]
+            v.push(d.join("../Resources/vlc/lib"));
         }
     }
     #[cfg(windows)]

@@ -18,13 +18,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # runtime: libVLC + FFmpeg downloaded into the installer (scripts/fetch-runtime.sh).
+          # Linux packages depend on the distribution's libvlc instead.
           - platform: windows-latest
-            args: ""
+            runtime: windows
+            args: "--config src-tauri/tauri.runtime.windows.json"
           - platform: macos-latest # Apple silicon
-            args: "--target aarch64-apple-darwin"
+            runtime: macos-arm64
+            triple: aarch64-apple-darwin
+            args: "--target aarch64-apple-darwin --config src-tauri/tauri.runtime.macos.json"
           - platform: macos-latest # Intel, cross-compiled on Apple silicon
-            args: "--target x86_64-apple-darwin"
+            runtime: macos-x64
+            triple: x86_64-apple-darwin
+            args: "--target x86_64-apple-darwin --config src-tauri/tauri.runtime.macos.json"
           - platform: ubuntu-22.04
+            runtime: ""
             args: ""
     runs-on: ${{ matrix.platform }}
     steps:
@@ -60,6 +68,11 @@ jobs:
         working-directory: src-tauri
         run: "cargo test --lib -- fuzz db:: sources:: library:: lab:: convert::"
 
+      - name: Bundle libVLC and FFmpeg
+        if: matrix.runtime != ''
+        shell: bash
+        run: bash scripts/fetch-runtime.sh ${{ matrix.runtime }}
+
       - uses: tauri-apps/tauri-action@v0
         id: tauri
         continue-on-error: true
@@ -81,6 +94,27 @@ jobs:
           releaseName: ${{ github.ref_type == 'tag' && format('Halcyon {0}', github.ref_name) || '' }}
           releaseDraft: true
           args: ${{ matrix.args }}
+
+      # Prove the packages work on a machine with no VLC or FFmpeg installed.
+      - name: Smoke test the installed Windows app
+        if: matrix.runtime == 'windows'
+        shell: pwsh
+        run: |
+          if (Test-Path "C:\Program Files\VideoLAN\VLC") { Write-Host "note: runner has VLC installed" }
+          $setup = Get-ChildItem src-tauri/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          Start-Process $setup.FullName -ArgumentList "/S" -Wait
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Halcyon\*.exe" | Where-Object { $_.Name -notlike "uninstall*" } | Select-Object -First 1
+          $p = Start-Process $exe.FullName -ArgumentList "--check" -Wait -PassThru -RedirectStandardOutput check.txt
+          Get-Content check.txt
+          if ($p.ExitCode -ne 0 -or -not (Select-String -Path check.txt -Pattern "Halcyon\vlc" -SimpleMatch -Quiet)) { throw "installed app did not load its bundled libVLC/FFmpeg" }
+
+      - name: Smoke test the macOS app
+        if: startsWith(matrix.runtime, 'macos')
+        continue-on-error: ${{ matrix.runtime == 'macos-x64' }} # needs Rosetta on the runner
+        run: |
+          app=$(ls -d src-tauri/target/${{ matrix.triple }}/release/bundle/macos/*.app | head -1)
+          "$app"/Contents/MacOS/* --check | tee check.txt
+          grep -q "Resources/vlc" check.txt
 
       - name: SBOM (CycloneDX)
         if: startsWith(matrix.platform, 'ubuntu')

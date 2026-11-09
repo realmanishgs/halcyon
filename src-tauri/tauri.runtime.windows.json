@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": {
+      "../vendor/windows/vlc/": "vlc/",
+      "../vendor/windows/ffmpeg/": "ffmpeg/"
+    }
+  }
+}

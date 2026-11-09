@@ -497,6 +497,19 @@ fn probe_file(path: String) -> Res<probe::ProbeResult> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     STARTED.get_or_init(std::time::Instant::now);
+    // `halcyon --check`: report which engine and tools this install uses, then exit
+    // (used by CI to prove the installers work on machines without VLC/FFmpeg).
+    if std::env::args().any(|a| a == "--check") {
+        let engine = engine::vlc::VlcEngine::load();
+        match &engine {
+            Ok(e) => println!("engine: {} {} ({})", e.info().name, e.info().version, e.info().location),
+            Err(e) => println!("engine: ERROR {e}"),
+        }
+        let ffprobe = probe::ffprobe_path();
+        println!("ffprobe: {}", ffprobe.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "not found".into()));
+        println!("ffmpeg: {}", probe::ffmpeg_path().map(|p| p.display().to_string()).unwrap_or_else(|| "not found".into()));
+        std::process::exit(if engine.is_ok() && ffprobe.is_some() { 0 } else { 1 });
+    }
     let (engine, engine_error) = match engine::vlc::VlcEngine::load() {
         Ok(e) => (Some(Box::new(e) as Box<dyn MediaEngine>), None),
         Err(e) => (None, Some(e)),

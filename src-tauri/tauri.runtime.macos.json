@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": {
+      "../vendor/macos/vlc/": "vlc/",
+      "../vendor/macos/ffmpeg/": "ffmpeg/"
+    }
+  }
+}

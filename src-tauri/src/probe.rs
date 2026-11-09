@@ -72,6 +72,14 @@ pub fn ffprobe_path() -> Option<PathBuf> {
         return Some(PathBuf::from(p));
     }
     let exe = if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" };
+    // Copy bundled by the installer, then the user's PATH.
+    if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())) {
+        for d in [dir.join("ffmpeg"), dir.join("../Resources/ffmpeg")] {
+            if d.join(exe).is_file() {
+                return Some(d.join(exe));
+            }
+        }
+    }
     std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths).map(|d| d.join(exe)).find(|p| p.is_file())
     })

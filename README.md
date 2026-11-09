@@ -98,16 +98,18 @@ Put your own real-world files (Dolby Atmos, Dolby Vision, Eclipsa/IAMF exports, 
 
 | Platform | Built where | Output | Runtime requirement | Status |
 |---|---|---|---|---|
-| Windows x64 | locally (`npx tauri build`) or CI | `.msi`, NSIS `-setup.exe` | VLC 3.x 64-bit installed, or a `vlc/` folder next to `halcyon.exe` | built and smoke-tested locally |
-| macOS (Apple silicon, Intel) | CI only (needs a Mac) | `.dmg`, `.app` | `/Applications/VLC.app` (3.x) | CI workflow written, not yet run; video opens in libVLC's own window (embedding not implemented) |
-| Linux x64 | CI only | `.deb` (depends on `libvlc5`), `.rpm`, `.AppImage` | system libVLC 3 | CI workflow written, not yet run; video opens in libVLC's own window |
+| Windows x64 | CI | `.msi`, NSIS `-setup.exe` | **none** — libVLC 3.0.21 and FFmpeg are inside the installer | CI installs it on a runner without VLC and runs `halcyon --check` |
+| macOS (Apple silicon, Intel) | CI (needs a Mac) | `.dmg` | **none** for playback (libVLC inside the app); bundled FFmpeg is x86_64, so Apple-silicon Macs need Rosetta 2 for Info/Library/Lab/Convert | CI runs `--check` on the built app; video opens in libVLC's own window (embedding not implemented on macOS) |
+| Linux x64 | CI | `.deb` (depends on `libvlc5`), `.rpm`, `.AppImage` | system libVLC 3 and FFmpeg | built; video opens in libVLC's own window |
 
-CI: `.github/workflows/release.yml` builds all three on GitHub-hosted runners when a `v*` tag is
-pushed (or when run manually) and attaches the installers to a draft release. Installers are unsigned;
-Windows SmartScreen and macOS Gatekeeper will warn until code signing is configured.
+Get them from GitHub: **Releases** (draft release per `v*` tag) or **Actions → release → latest run → Artifacts**.
+`scripts/fetch-runtime.sh` downloads the official VLC build and an FFmpeg build into `vendor/` for the
+installer (`--config src-tauri/tauri.runtime.<os>.json`); normal builds and tests don't need it.
+Installers are unsigned: Windows SmartScreen ("More info → Run anyway") and macOS Gatekeeper
+(right-click → Open) will warn once.
 
-libVLC is **not bundled**: shipping VLC's full plugin set would bring GPL plugins into the package
-(see [LICENSE_AUDIT.md](LICENSE_AUDIT.md)). That decision is still open.
+Bundling VLC's full plugin set and a GPL FFmpeg build is fine for personal use, but makes the package
+GPL-licensed if it is ever distributed (see [LICENSE_AUDIT.md](LICENSE_AUDIT.md)).
 
 ## Documents
 
