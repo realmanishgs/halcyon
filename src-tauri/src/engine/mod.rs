@@ -7,7 +7,7 @@ mod stress;
 #[cfg(test)]
 mod tests;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// libVLC 3 and ffprobe cannot open Win32 verbatim paths (`\\?\C:\...`,
 /// `\\?\UNC\server\share`), which Rust's `canonicalize` produces. Convert them.
@@ -126,6 +126,141 @@ pub struct EngineInfo {
     pub location: String,
 }
 
+/// Settings that libVLC 3 only reads when its instance is created (video and
+/// audio filters, decoder and text-renderer options). Changing them recreates
+/// the instance; playback is restored at the same position.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct EngineConfig {
+    pub hw_decode: bool,
+    pub normalize: bool,
+    pub replay_gain: bool,
+    /// None, "spectrum", "scope", "vuMeter", "spectrometer", "goom".
+    pub visualizer: Option<String>,
+    /// 0, 90, 180, 270, "hflip", "vflip" as transform types; "" = none.
+    pub transform: String,
+    /// Subtitle text scale in percent (10–500).
+    pub sub_scale: u32,
+    /// 0xRRGGBB.
+    pub sub_color: u32,
+    /// 0 none, 2 thin, 4 normal, 6 thick.
+    pub sub_outline: u32,
+    /// 0–255.
+    pub sub_background: u32,
+    /// Pixels from the bottom.
+    pub sub_margin: i32,
+}
+
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self {
+            hw_decode: true,
+            normalize: false,
+            replay_gain: false,
+            visualizer: None,
+            transform: String::new(),
+            sub_scale: 100,
+            sub_color: 0xFFFFFF,
+            sub_outline: 4,
+            sub_background: 0,
+            sub_margin: 0,
+        }
+    }
+}
+
+impl EngineConfig {
+    /// libVLC command-line options for this configuration.
+    pub fn args(&self) -> Vec<String> {
+        let mut a = Vec::new();
+        if self.normalize {
+            a.push("--audio-filter=normvol".into());
+        }
+        if self.replay_gain {
+            a.push("--audio-replay-gain-mode=track".into());
+        }
+        match self.visualizer.as_deref() {
+            Some("goom") => a.push("--audio-visual=goom".into()),
+            Some(e @ ("spectrum" | "scope" | "vuMeter" | "spectrometer")) => {
+                a.push("--audio-visual=visual".into());
+                a.push(format!("--effect-list={e}"));
+            }
+            _ => {}
+        }
+        if ["90", "180", "270", "hflip", "vflip", "transpose", "antitranspose"].contains(&self.transform.as_str()) {
+            a.push("--video-filter=transform".into());
+            a.push(format!("--transform-type={}", self.transform));
+        }
+        a.push(format!("--sub-text-scale={}", self.sub_scale.clamp(10, 500)));
+        a.push(format!("--freetype-color={}", self.sub_color & 0xFFFFFF));
+        a.push(format!("--freetype-outline-thickness={}", self.sub_outline.min(6)));
+        a.push(format!("--freetype-background-opacity={}", self.sub_background.min(255)));
+        a.push(format!("--sub-margin={}", self.sub_margin.clamp(0, 1000)));
+        a
+    }
+
+    /// Per-media options. Hardware decoding must be set on the media: the
+    /// libVLC 3 player object shadows the instance-level `avcodec-hw` option
+    /// (measured: the instance flag is ignored, the media option is honoured).
+    pub fn media_options(&self) -> Vec<String> {
+        // The transform filter cannot take GPU (D3D11) frames, so rotation and
+        // flips decode in software.
+        let hw = self.hw_decode && self.transform.is_empty();
+        vec![format!(":avcodec-hw={}", if hw { "any" } else { "none" })]
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum EngineEvent {
+    Opening,
+    Playing,
+    Paused,
+    Stopped,
+    Ended,
+    Error,
+    Length,
+    Tracks,
+    Vout,
+    Media,
+}
+
+pub type EventSink = std::sync::Arc<dyn Fn(EngineEvent) + Send + Sync>;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Equalizer {
+    pub preamp: f32,
+    pub bands: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EqualizerInfo {
+    pub frequencies: Vec<f32>,
+    pub presets: Vec<(String, Equalizer)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VideoAdjust {
+    pub brightness: f32,
+    pub contrast: f32,
+    pub hue: f32,
+    pub saturation: f32,
+    pub gamma: f32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AudioDevice {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct BrowseItem {
+    pub name: String,
+    pub url: String,
+    /// "directory", "file", "stream", "playlist", "disc", "unknown".
+    pub kind: String,
+}
+
 pub trait MediaEngine: Send {
     fn info(&self) -> EngineInfo;
     /// `source` is a local path or a URL. `surface` is a native window handle
@@ -156,4 +291,23 @@ pub trait MediaEngine: Send {
     fn video_size(&self) -> Option<(u32, u32)>;
     fn stats(&self) -> Option<MediaStats>;
     fn meta(&self) -> EngineMeta;
+    fn set_event_sink(&mut self, sink: EventSink);
+    /// Recreates the engine instance if `cfg` changes its options; returns true if it did.
+    fn configure(&mut self, cfg: &EngineConfig) -> Result<bool, String>;
+    fn equalizer_info(&self) -> EqualizerInfo;
+    /// `None` disables the equalizer.
+    fn set_equalizer(&mut self, eq: Option<&Equalizer>) -> Result<(), String>;
+    /// `None` disables picture adjustment.
+    fn set_video_adjust(&mut self, adj: Option<&VideoAdjust>);
+    /// `None` = no crop; otherwise "16:9" (ratio) or "WxH+X+Y".
+    fn set_crop(&mut self, geometry: Option<&str>);
+    fn audio_devices(&self) -> Vec<AudioDevice>;
+    /// Empty id = system default.
+    fn set_audio_device(&mut self, id: &str);
+    /// Lists a directory-like location (local folder, SMB/FTP/SFTP/NFS share, UPnP server).
+    fn browse(&mut self, url: &str, timeout_ms: u32) -> Result<Vec<BrowseItem>, String>;
+    /// LAN discovery services (UPnP, mDNS/SMB, SAP) available in this engine.
+    fn discovery_services(&self) -> Vec<(String, String)>;
+    /// Runs a discovery service for `wait_ms` and returns what it found.
+    fn discover(&mut self, service: &str, wait_ms: u32) -> Result<Vec<BrowseItem>, String>;
 }

@@ -2,7 +2,7 @@
 //! Run `bash scripts/make-test-media.sh` first. Requires VLC 3.x and ffprobe.
 //! Uses VLC's dummy audio/video outputs so tests are silent and headless.
 
-use super::vlc::VlcEngine;
+use super::vlc::{self, VlcEngine};
 use super::*;
 use crate::probe;
 use std::path::PathBuf;
@@ -187,4 +187,177 @@ fn path_over_260_chars_plays() {
     e.open(&s, None).unwrap();
     let st = wait_for(&e, |s| s.state == PlaybackState::Playing && s.time_ms > 200, 10);
     assert_eq!(st.state, PlaybackState::Playing);
+}
+
+#[test]
+fn events_reach_the_sink() {
+    use std::sync::{Arc, Mutex};
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut e = headless();
+    let s2 = seen.clone();
+    e.set_event_sink(Arc::new(move |ev| s2.lock().unwrap().push(ev)));
+    e.open(&media("h264_aac.mp4"), None).unwrap();
+    wait_for(&e, |s| s.state == PlaybackState::Playing, 10);
+    sleep(Duration::from_millis(300));
+    e.seek_ms(e.status().length_ms - 400);
+    wait_for(&e, |s| s.state == PlaybackState::Ended, 10);
+    sleep(Duration::from_millis(200));
+    let v = seen.lock().unwrap().clone();
+    for want in [EngineEvent::Opening, EngineEvent::Playing, EngineEvent::Length, EngineEvent::Tracks, EngineEvent::Ended] {
+        assert!(v.contains(&want), "missing {want:?} in {v:?}");
+    }
+}
+
+#[test]
+fn reconfigure_keeps_position_and_accepts_every_option() {
+    let mut e = headless();
+    e.open(&media("h264_aac.mp4"), None).unwrap();
+    wait_for(&e, |s| s.state == PlaybackState::Playing, 10);
+    e.seek_ms(6_000);
+    wait_for(&e, |s| s.time_ms >= 6_000, 5);
+    e.set_volume(70);
+    let cfg = EngineConfig {
+        hw_decode: false,
+        normalize: true,
+        replay_gain: true,
+        visualizer: Some("spectrum".into()),
+        transform: "90".into(),
+        sub_scale: 150,
+        sub_color: 0xFFFF00,
+        sub_outline: 6,
+        sub_background: 128,
+        sub_margin: 40,
+    };
+    assert!(e.configure(&cfg).unwrap(), "new options recreate the instance");
+    assert!(!e.configure(&cfg).unwrap(), "same options are a no-op");
+    let s = wait_for(&e, |s| s.state == PlaybackState::Playing && s.time_ms >= 6_000, 10);
+    assert_eq!(s.state, PlaybackState::Playing);
+    assert!(s.time_ms >= 6_000 && s.time_ms < 9_000, "resumed at {}", s.time_ms);
+    // (Volume restore is checked in the app: the dummy audio output has no volume control.)
+    let st = e.stats().unwrap();
+    sleep(Duration::from_millis(500));
+    assert!(e.stats().unwrap().decoded_video > st.decoded_video, "decoding continues with filters");
+    // Every visualiser and transform is accepted by libVLC.
+    for v in ["scope", "vuMeter", "spectrometer", "goom"] {
+        e.configure(&EngineConfig { visualizer: Some(v.into()), ..Default::default() }).unwrap_or_else(|err| panic!("{v}: {err}"));
+    }
+    for t in ["180", "270", "hflip", "vflip"] {
+        let cfg = EngineConfig { transform: t.into(), ..Default::default() };
+        assert!(cfg.media_options().contains(&":avcodec-hw=none".to_string()), "rotation forces software decoding");
+        e.configure(&cfg).unwrap_or_else(|err| panic!("{t}: {err}"));
+        let st = wait_for(&e, |s| s.state == PlaybackState::Playing, 10);
+        let before = e.stats().map(|s| s.decoded_video).unwrap_or(0);
+        sleep(Duration::from_millis(1000));
+        let after = e.stats().map(|s| s.decoded_video).unwrap_or(0);
+        assert!(after > before, "{t}: decoding continues ({before} -> {after}, {st:?})");
+    }
+}
+
+#[test]
+fn equalizer_adjust_crop_and_devices() {
+    let mut e = headless();
+    let info = e.equalizer_info();
+    assert_eq!(info.frequencies.len(), 10);
+    assert!(info.presets.len() >= 15, "{} presets", info.presets.len());
+    assert!(info.presets.iter().any(|(n, _)| n == "Rock"));
+    e.open(&media("h264_aac.mp4"), None).unwrap();
+    wait_for(&e, |s| s.state == PlaybackState::Playing, 10);
+    let rock = info.presets.iter().find(|(n, _)| n == "Rock").unwrap().1.clone();
+    e.set_equalizer(Some(&rock)).unwrap();
+    e.set_equalizer(None).unwrap();
+    e.set_video_adjust(Some(&VideoAdjust { brightness: 1.2, contrast: 1.1, hue: 10.0, saturation: 1.5, gamma: 1.0 }));
+    e.set_crop(Some("16:9"));
+    e.set_crop(None);
+    e.set_video_adjust(None);
+    let before = e.stats().unwrap().decoded_video;
+    sleep(Duration::from_millis(500));
+    assert!(e.stats().unwrap().decoded_video > before);
+    // adummy exposes no devices; the real output is checked in the app.
+    let _ = e.audio_devices();
+}
+
+#[test]
+fn browses_a_local_folder_as_a_location() {
+    let mut e = headless();
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../test-media");
+    let url = vlc::file_uri(&dir.canonicalize().unwrap().to_string_lossy());
+    let items = e.browse(&url, 5000).expect("browse");
+    assert!(items.iter().any(|i| i.name == "h264_aac.mp4" && i.kind == "file"), "{items:?}");
+    assert!(e.discovery_services().iter().any(|(n, _)| n == "upnp"), "{:?}", e.discovery_services());
+    // An unreachable share either errors or lists nothing; it must not hang.
+    let t = Instant::now();
+    assert!(e.browse("smb://definitely-not-a-host.invalid/share", 1500).map(|v| v.is_empty()).unwrap_or(true));
+    assert!(t.elapsed() < Duration::from_secs(4));
+}
+
+/// Minimal HTTP/1.1 file server with Range support, for streaming tests.
+fn serve(path: PathBuf) -> u16 {
+    use std::io::{BufRead, BufReader, Write};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let data = std::fs::read(&path).unwrap();
+        for conn in l.incoming().flatten() {
+            let data = data.clone();
+            std::thread::spawn(move || {
+                let mut r = BufReader::new(conn.try_clone().unwrap());
+                let mut range = None;
+                let mut line = String::new();
+                while r.read_line(&mut line).unwrap_or(0) > 0 {
+                    let l = line.trim().to_ascii_lowercase();
+                    if l.is_empty() {
+                        break;
+                    }
+                    if let Some(v) = l.strip_prefix("range: bytes=") {
+                        let (a, b) = v.split_once('-').unwrap();
+                        let a: usize = a.parse().unwrap_or(0);
+                        let b: usize = b.parse().unwrap_or(data.len() - 1);
+                        range = Some((a, b.min(data.len() - 1)));
+                    }
+                    line.clear();
+                }
+                let mut w = conn;
+                let (a, b) = range.unwrap_or((0, data.len() - 1));
+                let head = if range.is_some() {
+                    format!("HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {a}-{b}/{}\r\n", data.len())
+                } else {
+                    "HTTP/1.1 200 OK\r\n".to_string()
+                };
+                let _ = write!(w, "{head}Accept-Ranges: bytes\r\nContent-Type: video/mp4\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", b - a + 1);
+                let _ = w.write_all(&data[a..=b]);
+            });
+        }
+    });
+    port
+}
+
+#[test]
+fn streams_over_http_with_seeking() {
+    let port = serve(PathBuf::from(media("h264_aac.mp4")));
+    let mut e = headless();
+    e.open(&format!("http://127.0.0.1:{port}/h264_aac.mp4"), None).unwrap();
+    let s = wait_for(&e, |s| s.state == PlaybackState::Playing && s.time_ms > 300, 10);
+    assert_eq!(s.state, PlaybackState::Playing);
+    assert!(s.seekable && s.length_ms > 5_000, "{s:?}");
+    e.seek_ms(7_000);
+    let s = wait_for(&e, |s| s.time_ms >= 7_000, 8);
+    assert!(s.time_ms >= 7_000, "seek over HTTP landed at {}", s.time_ms);
+    assert!(e.stats().unwrap().decoded_video > 0);
+}
+
+#[test]
+fn rotation_decodes_in_software() {
+    let log = std::env::temp_dir().join(format!("halcyon-hw-{}.log", std::process::id()));
+    let logarg = format!("--logfile={}", log.display());
+    let mut e = VlcEngine::load_with_args(&["--aout=adummy", "--vout=vdummy", "--file-logging", &logarg, "--log-verbose=2"]).unwrap();
+    e.configure(&EngineConfig { transform: "180".into(), ..Default::default() }).unwrap();
+    e.open(&media("h264_aac.mp4"), None).unwrap();
+    wait_for(&e, |s| s.state == PlaybackState::Playing, 10);
+    sleep(Duration::from_millis(1500));
+    let decoded = e.stats().unwrap().decoded_video;
+    drop(e);
+    let text = String::from_utf8_lossy(&std::fs::read(&log).unwrap_or_default()).into_owned();
+    let _ = std::fs::remove_file(&log);
+    assert!(decoded > 10, "decoded {decoded}");
+    assert!(!text.contains("for hardware decoding"), "hardware decoding was used with a rotation filter");
 }

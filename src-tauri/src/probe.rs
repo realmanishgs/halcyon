@@ -77,16 +77,35 @@ pub fn ffprobe_path() -> Option<PathBuf> {
     })
 }
 
-pub fn probe(path: &str) -> Result<ProbeResult, String> {
-    let bin = ffprobe_path().ok_or("ffprobe not found (install FFmpeg or set HALCYON_FFPROBE)")?;
+/// ffmpeg next to ffprobe (same FFmpeg install), else on PATH.
+pub fn ffmpeg_path() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("HALCYON_FFMPEG") {
+        return Some(PathBuf::from(p));
+    }
+    let exe = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    if let Some(sib) = ffprobe_path().and_then(|p| p.parent().map(|d| d.join(exe))).filter(|p| p.is_file()) {
+        return Some(sib);
+    }
+    std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|d| d.join(exe)).find(|p| p.is_file()))
+}
+
+/// A command that never flashes a console window on Windows.
+pub fn quiet(bin: impl AsRef<std::ffi::OsStr>) -> Command {
+    #[allow(unused_mut)]
     let mut cmd = Command::new(bin);
-    cmd.args(["-v", "error", "-print_format", "json", "-show_format", "-show_streams", "-show_chapters", "-show_stream_groups", "-i"])
-        .arg(crate::engine::plain_path(path));
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
+    cmd
+}
+
+pub fn probe(path: &str) -> Result<ProbeResult, String> {
+    let bin = ffprobe_path().ok_or("ffprobe not found (install FFmpeg or set HALCYON_FFPROBE)")?;
+    let mut cmd = quiet(bin);
+    cmd.args(["-v", "error", "-print_format", "json", "-show_format", "-show_streams", "-show_chapters", "-show_stream_groups", "-i"])
+        .arg(crate::engine::plain_path(path));
     let out = cmd.output().map_err(|e| format!("ffprobe failed to start: {e}"))?;
     if !out.status.success() {
         return Err(format!(
