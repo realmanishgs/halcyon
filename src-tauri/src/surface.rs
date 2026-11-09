@@ -36,6 +36,7 @@ mod imp {
     static SINK: OnceLock<Sink> = OnceLock::new();
     static HIDE_CURSOR: AtomicBool = AtomicBool::new(false);
     static LAST_MOVE_MS: AtomicU64 = AtomicU64::new(0);
+    static LAST_POS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(i64::MIN);
 
     fn emit(e: SurfaceEvent) {
         if let Some(s) = SINK.get() {
@@ -67,6 +68,15 @@ mod imp {
             WM_LBUTTONDBLCLK => emit(SurfaceEvent::DoubleClick),
             WM_RBUTTONUP => emit(SurfaceEvent::Context),
             WM_MOUSEMOVE => {
+                // Windows also sends WM_MOUSEMOVE when the window moves or resizes under a
+                // still cursor (e.g. when fullscreen controls hide and the video grows), which
+                // would wake the controls again at once. Only report real cursor movement.
+                let mut p = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
+                GetCursorPos(&mut p);
+                let packed = ((p.x as i64) << 32) | (p.y as u32 as i64);
+                if LAST_POS.swap(packed, Ordering::Relaxed) == packed {
+                    return 0;
+                }
                 // Throttled: the UI only needs it to reveal auto-hidden controls.
                 let t = now_ms();
                 if t.saturating_sub(LAST_MOVE_MS.load(Ordering::Relaxed)) > 120 {

@@ -720,7 +720,9 @@ export default function App() {
 
   return (
     <div className={`app${fullscreen ? " fs" : ""}${fullscreen && !controlsShown ? " idle" : ""}`}
-      onPointerMove={fullscreen ? wake : undefined}>
+      // WebView2 fires synthetic zero-movement pointermoves after layout changes (e.g. the
+      // controls hiding); only real movement may reveal them again.
+      onPointerMove={fullscreen ? (e) => { if (e.movementX || e.movementY) wake(); } : undefined}>
       <div className="body">
         {!sidebarHidden && (
           <>
