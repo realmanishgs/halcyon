@@ -59,6 +59,19 @@ jobs:
         run: cargo test --lib sources
 
       - uses: tauri-apps/tauri-action@v0
+        id: tauri
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: ${{ github.ref_type == 'tag' && format('Halcyon {0}', github.ref_name) || '' }}
+          releaseDraft: true
+          args: ${{ matrix.args }}
+
+      # Bundler tool downloads (WiX/NSIS/AppImage) occasionally hit 5xx; retry once.
+      - uses: tauri-apps/tauri-action@v0
+        if: steps.tauri.outcome == 'failure'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:

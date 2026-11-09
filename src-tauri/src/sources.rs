@@ -174,6 +174,7 @@ mod tests {
         assert_eq!(parse_xspf(t), vec!["file:///C:/M%C3%BCsic/a%20b.mp3", "http://x/y?a=1&b=2"]);
     }
 
+    #[cfg(windows)]
     #[test]
     fn resolves_relative_file_uri_and_urls() {
         let base = Path::new(r"C:\lists");
