@@ -325,8 +325,18 @@ unsafe fn open_library(dir: &Path) -> Result<Library, String> {
 unsafe fn open_library(dir: &Path) -> Result<Library, String> {
     // VLC.app keeps its plugins outside the lib folder; tell libvlccore where.
     #[cfg(target_os = "macos")]
-    if std::env::var_os("VLC_PLUGIN_PATH").is_none() {
-        std::env::set_var("VLC_PLUGIN_PATH", dir.join("../plugins"));
+    {
+        if std::env::var_os("VLC_PLUGIN_PATH").is_none() {
+            std::env::set_var("VLC_PLUGIN_PATH", dir.join("../plugins"));
+        }
+        // VLC.app's libvlc.dylib links "@rpath/libvlccore.dylib" and relies on the VLC
+        // executable's rpath; Halcyon has none, so dlopen failed. Loading libvlccore
+        // first lets dyld match that install name to the already-loaded image.
+        let core = dir.join("libvlccore.dylib");
+        if core.is_file() {
+            let lib = Library::new(&core).map_err(|e| format!("Failed to load libvlccore.dylib: {e}"))?;
+            std::mem::forget(lib); // stays loaded for the life of the process, like libvlc itself
+        }
     }
     Library::new(dir.join(LIB_NAME)).map_err(|e| format!("Failed to load {LIB_NAME}: {e}"))
 }

@@ -39,15 +39,18 @@ case "${1:-}" in
     cp -R "$work/mnt/VLC.app/Contents/MacOS/lib" "$out/vlc/lib"
     cp -R "$work/mnt/VLC.app/Contents/MacOS/plugins" "$out/vlc/plugins"
     hdiutil detach "$work/mnt" >/dev/null
-    # Static x86_64 FFmpeg (evermeet.cx); on Apple silicon it runs under Rosetta 2.
+    # Static FFmpeg for this architecture (ffmpeg.martin-riedl.de builds, arm64 and amd64).
     # Optional: without it, playback works and inspection/library/Lab/Convert report FFmpeg missing.
+    ffarch=$([ "$1" = macos-arm64 ] && echo arm64 || echo amd64)
     for tool in ffmpeg ffprobe; do
-      if curl -fL --retry 3 -o "$work/$tool.zip" "https://evermeet.cx/ffmpeg/getrelease/$tool/zip"; then
+      if curl -fL --retry 3 -o "$work/$tool.zip" "https://ffmpeg.martin-riedl.de/redirect/latest/macos/$ffarch/release/$tool.zip"; then
         unzip -q -o "$work/$tool.zip" -d "$out/ffmpeg" && chmod +x "$out/ffmpeg/$tool"
       else
         echo "warning: $tool not bundled"
       fi
     done
+    # libvlc.dylib's dependencies, for the CI log.
+    otool -L "$out/vlc/lib/libvlc.dylib" || true
     ;;
   *)
     echo "usage: $0 windows|macos-arm64|macos-x64" >&2; exit 2 ;;
