@@ -4,3 +4,5 @@ src-tauri/target/
 src-tauri/gen/
 test-media/
 vendor/
+CLAUDE.md
+.claude/
