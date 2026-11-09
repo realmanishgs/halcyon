@@ -187,7 +187,9 @@ impl EngineConfig {
             _ => {}
         }
         if ["90", "180", "270", "hflip", "vflip", "transpose", "antitranspose"].contains(&self.transform.as_str()) {
-            a.push("--video-filter=transform".into());
+            // adjust is in the chain from the start: attaching it to a running OpenGL
+            // output afterwards failed intermittently (picture_adjust_survives_rotation).
+            a.push("--video-filter=adjust:transform".into());
             a.push(format!("--transform-type={}", self.transform));
             // Measured on Windows (libVLC 3.0.24): with the transform filter the Direct3D11
             // output stalls after the first frame (Direct3D9 and GDI on some transforms);

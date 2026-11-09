@@ -193,7 +193,8 @@ export default function App() {
 
   const refreshDetails = useCallback(() => {
     engine.tracks().then(setTracks).catch(() => {});
-    engine.meta().then(setMeta).catch(() => {});
+    // Keep the tags already read for this item if the engine was restarted and has not re-read them.
+    engine.meta().then((m) => setMeta((old) => (m.title || m.artist || m.album || !old ? m : old))).catch(() => {});
     engine.videoSize().then(setVideoSize).catch(() => {});
   }, []);
 
@@ -471,13 +472,15 @@ export default function App() {
       const k = await w.scaleFactor();
       store.set("normalSize", [sz.width / k, sz.height / k]);
       if (fullscreen) { await w.setFullscreen(false); setFullscreen(false); }
-      await w.setSize(new LogicalSize(420, hasVideo ? 300 : 160));
+      await w.setMinSize(new LogicalSize(320, 100));
+      await w.setSize(new LogicalSize(420, hasVideo ? 300 : 88));
       await w.setAlwaysOnTop(true);
       setPanel(null);
     } else {
       const [ww, hh] = store.get<[number, number]>("normalSize", [1200, 760]);
       await w.setAlwaysOnTop(false);
       await w.setSize(new LogicalSize(ww, hh));
+      await w.setMinSize(new LogicalSize(420, 300));
     }
     setMini(nextMini);
   }, [mini, fullscreen, hasVideo]);
@@ -568,6 +571,8 @@ export default function App() {
   pollRef.current = poll;
   const refreshRef = useRef(refreshDetails);
   refreshRef.current = refreshDetails;
+  const pictureRef = useRef({ adjust, crop });
+  pictureRef.current = { adjust, crop };
   const handlers = useRef({ togglePlay, toggleFullscreen, showMenu, setVolume, handleDropped, wake, status });
   handlers.current = { togglePlay, toggleFullscreen, showMenu, setVolume, handleDropped, wake, status };
   useEffect(() => {
@@ -586,6 +591,13 @@ export default function App() {
     const unEngine = listen<EngineEvent>("engine", ({ payload }) => {
       pollRef.current();
       if (payload === "tracks" || payload === "vout" || payload === "length") refreshRef.current();
+      // A new video output (new file, engine restart, rotation on/off) starts without the
+      // picture settings: the Direct3D11 output applies them in its own display stage.
+      if (payload === "vout") {
+        const pic = pictureRef.current;
+        if (pic.adjust) api.setVideoAdjust(pic.adjust).catch(() => {});
+        if (pic.crop) api.setCrop(pic.crop).catch(() => {});
+      }
     });
     const unDrop = getCurrentWebview().onDragDropEvent((e) => {
       const p = e.payload;
@@ -719,7 +731,7 @@ export default function App() {
   const effVolume = status.muted ? 0 : Math.max(0, status.volume);
 
   return (
-    <div className={`app${fullscreen ? " fs" : ""}${fullscreen && !controlsShown ? " idle" : ""}`}
+    <div className={`app${fullscreen ? " fs" : ""}${fullscreen && !controlsShown ? " idle" : ""}${mini && !hasVideo ? " mini-audio" : ""}`}
       // WebView2 fires synthetic zero-movement pointermoves after layout changes (e.g. the
       // controls hiding); only real movement may reveal them again.
       onPointerMove={fullscreen ? (e) => { if (e.movementX || e.movementY) wake(); } : undefined}>

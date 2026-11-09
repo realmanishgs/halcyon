@@ -88,9 +88,16 @@ fn row(r: &rusqlite::Row) -> rusqlite::Result<MediaRow> {
     })
 }
 
+/// SQL for an album's grouping key: album-artist tag, else the file's folder
+/// (`rtrim` strips the file name: every character except the separators).
+const ALBUM_KEY: &str = r"COALESCE(album_artist, rtrim(path, replace(replace(path, '\', ''), '/', '')))";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Album {
     pub album: String,
+    /// Grouping key: the album-artist tag, else the folder.
+    pub key: String,
+    /// Album artist, the single track artist, or "Various artists".
     pub artist: String,
     pub year: Option<i64>,
     pub tracks: i64,
@@ -350,32 +357,38 @@ impl Db {
         Ok(v)
     }
 
+    /// Albums are grouped by album name plus the album-artist tag, or — when that tag is
+    /// missing — the folder, so tracks with different featured artists stay one album.
     pub fn albums(&self) -> Result<Vec<Album>, String> {
         let c = self.c();
         let mut st = c
-            .prepare(
-                "SELECT COALESCE(album, 'Unknown album'), COALESCE(album_artist, artist, 'Unknown artist') AS aa, MAX(year), COUNT(*),
-                        COALESCE(SUM(duration_ms), 0), MIN(path)
-                 FROM media WHERE kind = 'audio' GROUP BY 1, 2 ORDER BY aa COLLATE NOCASE, 1 COLLATE NOCASE",
-            )
+            .prepare(&format!(
+                "SELECT COALESCE(album, 'Unknown album'), {ALBUM_KEY} AS k,
+                        COALESCE(MAX(album_artist), CASE WHEN COUNT(DISTINCT artist) > 1 THEN 'Various artists' ELSE MAX(artist) END, 'Unknown artist') AS aa,
+                        MAX(year), COUNT(*), COALESCE(SUM(duration_ms), 0), MIN(path)
+                 FROM media WHERE kind = 'audio' GROUP BY 1, 2 ORDER BY aa COLLATE NOCASE, 1 COLLATE NOCASE"
+            ))
             .map_err(e)?;
         let v = st
-            .query_map([], |r| Ok(Album { album: r.get(0)?, artist: r.get(1)?, year: r.get(2)?, tracks: r.get(3)?, duration_ms: r.get(4)?, first_path: r.get(5)? }))
+            .query_map([], |r| {
+                Ok(Album { album: r.get(0)?, key: r.get(1)?, artist: r.get(2)?, year: r.get(3)?, tracks: r.get(4)?, duration_ms: r.get(5)?, first_path: r.get(6)? })
+            })
             .map_err(e)?
             .flatten()
             .collect();
         Ok(v)
     }
 
-    pub fn album_tracks(&self, album: &str, artist: &str) -> Result<Vec<MediaRow>, String> {
+    /// `key` is `Album::key` from `albums()`.
+    pub fn album_tracks(&self, album: &str, key: &str) -> Result<Vec<MediaRow>, String> {
         let c = self.c();
         let mut st = c
             .prepare(&format!(
                 "SELECT {COLS} FROM media WHERE kind = 'audio' AND COALESCE(album, 'Unknown album') = ?1
-                 AND COALESCE(album_artist, artist, 'Unknown artist') = ?2 ORDER BY COALESCE(disc, 1), COALESCE(track, 9999), path"
+                 AND {ALBUM_KEY} = ?2 ORDER BY COALESCE(disc, 1), COALESCE(track, 9999), path"
             ))
             .map_err(e)?;
-        let v = st.query_map(params![album, artist], row).map_err(e)?.flatten().collect();
+        let v = st.query_map(params![album, key], row).map_err(e)?.flatten().collect();
         Ok(v)
     }
 
@@ -580,12 +593,38 @@ mod tests {
     }
 
     #[test]
+    fn album_without_album_artist_stays_one_album_per_folder() {
+        // Seen in a real library: featured artists split one album into several.
+        let db = Db::memory();
+        let mut a = m("C:\\M\\Sun\\1.flac", "audio", "Accha Insaan", "sun saawariya", 1, "");
+        db.upsert_media(&a).unwrap();
+        a.path = "C:\\M\\Sun\\2.flac".into();
+        a.artist = Some("Accha Insaan, AtharvaMusic".into());
+        db.upsert_media(&a).unwrap();
+        a.path = "C:\\M\\Other\\3.flac".into();
+        db.upsert_media(&a).unwrap(); // same title, different folder: a different album
+        let albums = db.albums().unwrap();
+        assert_eq!(albums.len(), 2, "{albums:?}");
+        let sun = albums.iter().find(|x| x.tracks == 2).unwrap();
+        assert_eq!(sun.artist, "Various artists");
+        assert_eq!(db.album_tracks(&sun.album, &sun.key).unwrap().len(), 2);
+        // An album-artist tag wins over the folder.
+        let mut t = m("C:\\X\\4.flac", "audio", "B", "Gold", 1, "");
+        t.album_artist = Some("ABBA".into());
+        db.upsert_media(&t).unwrap();
+        t.path = "C:\\Y\\5.flac".into();
+        db.upsert_media(&t).unwrap();
+        let gold = db.albums().unwrap().into_iter().find(|x| x.album == "Gold").unwrap();
+        assert_eq!((gold.tracks, gold.artist.as_str()), (2, "ABBA"));
+    }
+
+    #[test]
     fn albums_artists_and_track_order() {
         let db = seeded();
         let albums = db.albums().unwrap();
         assert_eq!(albums.len(), 2);
         assert_eq!((albums[0].album.as_str(), albums[0].tracks), ("Blue", 2));
-        let t = db.album_tracks("Blue", "Ana").unwrap();
+        let t = db.album_tracks("Blue", &albums[0].key).unwrap();
         assert_eq!(t.iter().map(|m| m.path.as_str()).collect::<Vec<_>>(), ["a.flac", "b.flac"]);
         assert_eq!(db.artists().unwrap().len(), 2);
         assert_eq!(db.list_media(Some("video"), None, false, None).unwrap().len(), 1);

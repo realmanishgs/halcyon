@@ -165,7 +165,7 @@ export interface MediaRow {
   duration_ms: number | null; codec: string | null; width: number | null; height: number | null; size: number | null;
   favorite: boolean; play_count: number; last_played: number | null; lyrics: string | null;
 }
-export interface Album { album: string; artist: string; year: number | null; tracks: number; duration_ms: number; first_path: string }
+export interface Album { album: string; key: string; artist: string; year: number | null; tracks: number; duration_ms: number; first_path: string }
 export interface Artist { artist: string; albums: number; tracks: number }
 export interface Rule { field: string; op: string; value: string }
 export interface SmartRules { match: "all" | "any"; rules: Rule[]; limit: number | null; sort: string | null }
@@ -209,7 +209,7 @@ export const api = {
   list: (kind: string | null, search: string | null, favorites = false, sort: string | null = null) =>
     invoke<MediaRow[]>("library_list", { kind, search, favorites, sort }),
   albums: () => invoke<Album[]>("library_albums"),
-  albumTracks: (album: string, artist: string) => invoke<MediaRow[]>("library_album_tracks", { album, artist }),
+  albumTracks: (album: string, key: string) => invoke<MediaRow[]>("library_album_tracks", { album, key }),
   artists: () => invoke<Artist[]>("library_artists"),
   artistTracks: (artist: string) => invoke<MediaRow[]>("library_artist_tracks", { artist }),
   mediaRow: (path: string) => invoke<MediaRow | null>("media_row", { path }),

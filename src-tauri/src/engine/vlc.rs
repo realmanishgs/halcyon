@@ -819,6 +819,14 @@ impl MediaEngine for VlcEngine {
                 }
             }
         }
+        // Picture adjustment belongs to the video output, which the restart replaced:
+        // re-apply once the new one exists.
+        if active && self.adjust.is_some() {
+            let t = std::time::Instant::now();
+            while unsafe { (self.api.libvlc_media_player_has_vout)(self.player) } == 0 && t.elapsed().as_millis() < 3000 {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
         let adj = self.adjust.clone();
         self.set_video_adjust(adj.as_ref());
         Ok(true)
@@ -879,12 +887,14 @@ impl MediaEngine for VlcEngine {
             match adj {
                 None => (self.api.libvlc_video_set_adjust_int)(self.player, ADJUST_ENABLE, 0),
                 Some(a) => {
-                    (self.api.libvlc_video_set_adjust_int)(self.player, ADJUST_ENABLE, 1);
+                    // Values first, then enable: a filter created by the enable reads the
+                    // values at creation (setting them afterwards raced with its start).
                     (self.api.libvlc_video_set_adjust_float)(self.player, ADJUST_CONTRAST, a.contrast.clamp(0.0, 2.0));
                     (self.api.libvlc_video_set_adjust_float)(self.player, ADJUST_BRIGHTNESS, a.brightness.clamp(0.0, 2.0));
                     (self.api.libvlc_video_set_adjust_float)(self.player, ADJUST_HUE, a.hue.clamp(-180.0, 180.0));
                     (self.api.libvlc_video_set_adjust_float)(self.player, ADJUST_SATURATION, a.saturation.clamp(0.0, 3.0));
                     (self.api.libvlc_video_set_adjust_float)(self.player, ADJUST_GAMMA, a.gamma.clamp(0.01, 10.0));
+                    (self.api.libvlc_video_set_adjust_int)(self.player, ADJUST_ENABLE, 1);
                 }
             }
         }

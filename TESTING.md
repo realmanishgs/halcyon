@@ -112,10 +112,26 @@ working set (app + WebView2), 1.27 % CPU playing 1080p H.264 (measured with the 
 may have been throttled). Accessibility: DOM audit of 10 pages in both themes in the browser preview
 (`?mock`): every control named, form fields labelled, heading order, focus ring, WCAG AA text contrast.
 
+## 6. Real-window check of phases 2–7 (recorded 2026-11-09)
+
+Driven with real mouse/keyboard input on the release build:
+
+| Check | Result |
+|---|---|
+| Fullscreen video and audio, cursor resting on the picture | controls + playhead hide after 2.5 s and stay hidden; mouse movement reveals them (was broken: synthetic mouse-moves kept waking them) |
+| Library scan of a real 3,310-track collection | indexed; list, search, sort work |
+| Music page | 1,083 albums with real cover art; albums without an album-artist tag no longer split by featured artist (fixed, `album_without_album_artist_stays_one_album_per_folder`) |
+| Synced lyrics (sidecar LRC) | current line highlighted in time |
+| Audio Lab on a 5.1 E-AC-3 file | integrated −14.1 LUFS, true peak −17.4 dBTP, timeline playhead follows playback |
+| Picture adjust (brightness, saturation) | visible on the Direct3D11 output |
+| Rotate 90° while playing | resumes at the same position, rotated |
+| Adjust + rotate in both directions | settings survived neither direction at first (fixed: re-applied when a video output appears; `adjust` placed in the rotated filter chain from the start; `picture_adjust_survives_rotation` measures it with snapshots) |
+| EQ preset "Rock" | bands move, EQ switches on |
+| Accent colour, Spectrum visualiser for audio | accent recolours the UI; spectrum drawn in the video area |
+| Mini player | always on top; audio shows just the control bar (was clipped artwork — fixed), visualiser shows above the bar; Esc restores the window |
+
 ## Not yet covered
 
-Visual check of the new pages, subtitle styling, mini player and visualisers in the real window (the PC was
-locked during this round, so screenshots were impossible; the UI was reviewed through the DOM with a mock
-backend). Real SMB/UPnP servers, automated UI tests (WebDriver via tauri-driver), OLE drag from Explorer onto
+Subtitle styling by eye. Real SMB/UPnP servers, automated UI tests (WebDriver via tauri-driver), OLE drag from Explorer onto
 the web area, real Dolby Atmos / Dolby Vision / Eclipsa exports (add to `corpus/`), 24-hour soak, IAMF mix
 rendering (needs libiamf), code signing.

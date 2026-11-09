@@ -385,3 +385,63 @@ fn visualisers_create_a_video_output() {
         assert!(e.status().has_video, "{v}: no video output for the visualiser");
     }
 }
+
+/// Mean per-pixel colour spread (max - min channel) of a PNG snapshot: ~0 for grey.
+fn colourfulness(png: &std::path::Path) -> f64 {
+    let ff = probe::ffmpeg_path().unwrap();
+    let out = probe::quiet(ff).args(["-v", "error", "-i"]).arg(png).args(["-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "64x36", "-"]).output().unwrap();
+    let px = out.stdout.chunks_exact(3);
+    let n = px.len().max(1) as f64;
+    px.map(|p| (*p.iter().max().unwrap() as f64) - (*p.iter().min().unwrap() as f64)).sum::<f64>() / n
+}
+
+fn mean_level(png: &std::path::Path) -> f64 {
+    let ff = probe::ffmpeg_path().unwrap();
+    let out = probe::quiet(ff).args(["-v", "error", "-i"]).arg(png).args(["-f", "rawvideo", "-pix_fmt", "gray", "-s", "64x36", "-"]).output().unwrap();
+    out.stdout.iter().map(|b| *b as f64).sum::<f64>() / out.stdout.len().max(1) as f64
+}
+
+#[test]
+fn picture_adjust_survives_rotation() {
+    // Real-use order, as in the app: adjust on the normal output, then rotate
+    // (engine restart), then adjust again while rotated.
+    let _serial = heavy();
+    if probe::ffmpeg_path().is_none() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("halcyon-adj-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let snap = |e: &mut VlcEngine, name: &str| {
+        let p = dir.join(name);
+        e.snapshot(&p.to_string_lossy()).unwrap();
+        sleep(Duration::from_millis(300));
+        (colourfulness(&p), mean_level(&p))
+    };
+    let mut e = VlcEngine::load_with_args(&["--aout=adummy"]).unwrap();
+    let grey = VideoAdjust { brightness: 1.0, contrast: 1.0, hue: 0.0, saturation: 0.0, gamma: 1.0 };
+    let dark = VideoAdjust { brightness: 0.5, contrast: 1.0, hue: 0.0, saturation: 1.0, gamma: 1.0 };
+    e.open(&media("h264_aac.mp4"), None).unwrap();
+    wait_for(&e, |s| s.state == PlaybackState::Playing && s.has_video, 10);
+    e.set_video_adjust(Some(&grey));
+    e.configure(&EngineConfig { transform: "90".into(), ..Default::default() }).unwrap();
+    wait_for(&e, |s| s.state == PlaybackState::Playing && s.has_video, 10);
+    sleep(Duration::from_millis(1200));
+    let after_restart = snap(&mut e, "a.png");
+    // The app re-applies picture settings when a video output appears; doing it again must be harmless.
+    e.set_video_adjust(Some(&grey));
+    sleep(Duration::from_millis(1200));
+    let reapplied = snap(&mut e, "a2.png");
+    println!("
+REAPPLY {reapplied:?}");
+    e.set_video_adjust(Some(&dark));
+    sleep(Duration::from_millis(1200));
+    let changed_while_rotated = snap(&mut e, "b.png");
+    e.set_video_adjust(None);
+    sleep(Duration::from_millis(1200));
+    let reset = snap(&mut e, "c.png");
+    println!("
+ADJ restart {after_restart:?} dark {changed_while_rotated:?} reset {reset:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(after_restart.0 < 10.0, "adjustment lost across the engine restart: {after_restart:?}");
+    assert!(changed_while_rotated.0 > 60.0 && changed_while_rotated.1 < reset.1 - 20.0, "darkening while rotated: {changed_while_rotated:?} vs {reset:?}");
+}

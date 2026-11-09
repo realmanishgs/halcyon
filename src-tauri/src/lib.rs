@@ -304,7 +304,7 @@ fn library_list(kind: Option<String>, search: Option<String>, favorites: bool, s
 #[tauri::command]
 fn library_albums(s: State<AppState>) -> Res<Vec<db::Album>> { db(&s)?.albums() }
 #[tauri::command]
-fn library_album_tracks(album: String, artist: String, s: State<AppState>) -> Res<Vec<db::MediaRow>> { db(&s)?.album_tracks(&album, &artist) }
+fn library_album_tracks(album: String, key: String, s: State<AppState>) -> Res<Vec<db::MediaRow>> { db(&s)?.album_tracks(&album, &key) }
 #[tauri::command]
 fn library_artists(s: State<AppState>) -> Res<Vec<db::Artist>> { db(&s)?.artists() }
 #[tauri::command]

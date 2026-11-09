@@ -229,7 +229,7 @@ export function MusicPage({ actions }: { actions: PlayActions }) {
       {tab === "albums" && (
         <div className="grid">
           {albums.filter((a) => !ql || `${a.album} ${a.artist}`.toLowerCase().includes(ql)).map((a) => (
-            <button key={`${a.artist}\u0000${a.album}`} className="card" onClick={() => api.albumTracks(a.album, a.artist).then((rows) => setOpen({ title: a.album, sub: `${a.artist}${a.year ? ` · ${a.year}` : ""}`, rows, cover: a.first_path }))}>
+            <button key={`${a.key}\u0000${a.album}`} className="card" title={`${a.album} — ${a.artist}`} onClick={() => api.albumTracks(a.album, a.key).then((rows) => setOpen({ title: a.album, sub: `${a.artist}${a.year ? ` · ${a.year}` : ""}`, rows, cover: a.first_path }))}>
               <Cover path={a.first_path} size={148} />
               <span className="card-t">{a.album}</span>
               <span className="card-s">{a.artist}</span>

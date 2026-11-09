@@ -335,3 +335,6 @@ input[type="color"] { width: 32px; height: 26px; border: 1px solid var(--border)
 .ly:hover { color: var(--text-2); }
 .ly.on { color: var(--text); font-weight: 600; }
 .ly-plain { white-space: pre-wrap; font: var(--text-md) var(--font-ui); color: var(--text-2); margin: 0; }
+
+/* Mini player with audio: only the control bar. */
+.app.mini-audio .body { display: none; }
