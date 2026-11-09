@@ -99,7 +99,7 @@ Put your own real-world files (Dolby Atmos, Dolby Vision, Eclipsa/IAMF exports, 
 | Platform | Built where | Output | Runtime requirement | Status |
 |---|---|---|---|---|
 | Windows x64 | CI | `.msi`, NSIS `-setup.exe` | **none** — libVLC 3.0.21 and FFmpeg are inside the installer | CI installs it on a runner without VLC and runs `halcyon --check` |
-| macOS (Apple silicon, Intel) | CI (needs a Mac) | `.dmg` | **none** for playback (libVLC inside the app); bundled FFmpeg is x86_64, so Apple-silicon Macs need Rosetta 2 for Info/Library/Lab/Convert | CI runs `--check` on the built app; video opens in libVLC's own window (embedding not implemented on macOS) |
+| macOS (Apple silicon, Intel) | CI (needs a Mac) | `.dmg` | **none** — libVLC 3.0.21 and native FFmpeg (arm64 / x86_64) are inside the app | CI runs `--check` on the built app; video opens in libVLC's own window (embedding not implemented on macOS) |
 | Linux x64 | CI | `.deb` (depends on `libvlc5`), `.rpm`, `.AppImage` | system libVLC 3 and FFmpeg | built; video opens in libVLC's own window |
 
 Get them from GitHub: **Releases** (draft release per `v*` tag) or **Actions → release → latest run → Artifacts**.
