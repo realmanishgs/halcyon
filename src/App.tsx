@@ -1,31 +1,53 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { LogicalSize } from "@tauri-apps/api/dpi";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { Menu } from "@tauri-apps/api/menu";
 import {
-  engine, basename, store, formatTime, RATES, ASPECTS,
-  type Diagnostics, type EngineMeta, type MediaStats, type OpenResult, type PlaybackStatus,
-  type SurfaceEvent, type TrackSelection,
+  engine, api, basename, store, formatTime, RATES, ASPECTS, DEFAULT_CONFIG,
+  type AudioDevice, type Diagnostics, type EngineConfig, type EngineEvent, type EngineMeta, type EqualizerInfo,
+  type Lyrics, type MediaStats, type OpenResult, type PlaybackStatus, type SurfaceEvent, type TrackSelection, type VideoAdjust,
 } from "./engine";
 import { Icon } from "./icons";
 import { Inspector } from "./Inspector";
 import { SeekBar } from "./SeekBar";
-import { QueuePanel, TunePanel } from "./Panels";
+import { AudioPanel, PicturePanel, QueuePanel, SleepTimer, TunePanel, type EqState } from "./Panels";
+import { LibraryPage, MusicPage, NetworkPage, PlaylistsPage, StatsPage, VideosPage, type PlayActions } from "./Library";
+import { LabPage } from "./Lab";
+import { ConvertPage } from "./Convert";
+import { SettingsPage } from "./Settings";
 
-type View = "player" | "settings";
-type PanelTab = "queue" | "info" | "tune";
+type View = "player" | "library" | "music" | "videos" | "playlists" | "network" | "lab" | "convert" | "stats" | "settings";
+type PanelTab = "queue" | "info" | "tune" | "audio" | "picture";
 type Repeat = "off" | "all" | "one";
 
-const NAV: { id: string; label: string; icon: string; phase: number }[] = [
-  { id: "library", label: "Library", icon: "library", phase: 2 },
-  { id: "music", label: "Music", icon: "music", phase: 6 },
-  { id: "videos", label: "Videos", icon: "video", phase: 6 },
-  { id: "playlists", label: "Playlists", icon: "list", phase: 3 },
-  { id: "lab", label: "Immersive Audio Lab", icon: "lab", phase: 5 },
+const NAV: { id: View; label: string; icon: string }[] = [
+  { id: "library", label: "Library", icon: "library" },
+  { id: "music", label: "Music", icon: "music" },
+  { id: "videos", label: "Videos", icon: "video" },
+  { id: "playlists", label: "Playlists", icon: "list" },
+  { id: "network", label: "Network", icon: "network" },
+  { id: "lab", label: "Immersive Audio Lab", icon: "lab" },
+  { id: "convert", label: "Convert", icon: "convert" },
+  { id: "stats", label: "Listening", icon: "clock" },
 ];
+const PANEL_TABS: [PanelTab, string][] = [["queue", "Queue"], ["info", "Info"], ["tune", "Tune"], ["audio", "Audio"], ["picture", "Picture"]];
+const FLAT_EQ = (n: number): EqState => ({ enabled: false, preset: "Flat", preamp: 0, bands: Array(n).fill(0) });
+
+function applyTheme(theme: string, accent: string | null) {
+  const r = document.documentElement;
+  if (theme === "system") r.removeAttribute("data-theme"); else r.setAttribute("data-theme", theme);
+  for (const v of ["--accent", "--accent-hover", "--accent-weak", "--focus"]) r.style.removeProperty(v);
+  if (accent) {
+    r.style.setProperty("--accent", accent);
+    r.style.setProperty("--accent-hover", accent);
+    r.style.setProperty("--accent-weak", accent + "22");
+    r.style.setProperty("--focus", accent);
+  }
+}
 const MEDIA_EXT = [
   "mp4", "m4v", "mkv", "avi", "mov", "webm", "flv", "wmv", "asf", "ts", "m2ts", "mts", "mpg", "mpeg", "vob",
   "3gp", "ogg", "ogm", "ogv", "mxf", "dv", "mp3", "mp2", "flac", "wav", "aif", "aiff", "aac", "m4a", "opus",
@@ -68,10 +90,29 @@ export default function App() {
   const [aspect, setAspect] = useState("default");
   const [deinterlace, setDeinterlace] = useState<string | null>(null);
   const [recents, setRecents] = useState<string[]>(() => store.get("recents", []));
+  const [cfg, setCfg] = useState<EngineConfig>(DEFAULT_CONFIG);
+  const [eqInfo, setEqInfo] = useState<EqualizerInfo | null>(null);
+  const [eq, setEq] = useState<EqState>(() => store.get("eq", FLAT_EQ(10)));
+  const [labGain, setLabGain] = useState(0);
+  const [adjust, setAdjust] = useState<VideoAdjust | null>(null);
+  const [crop, setCrop] = useState<string | null>(null);
+  const [devices, setDevices] = useState<AudioDevice[]>([]);
+  const [device, setDevice] = useState<string>(() => store.get("audioDevice", ""));
+  const [theme, setTheme] = useState<string>(() => store.get("theme", "system"));
+  const [accent, setAccent] = useState<string | null>(() => store.get("accent", null));
+  const [privateMode, setPrivateMode] = useState<boolean>(() => store.get("private", false));
+  const [resumeOn, setResumeOn] = useState<boolean>(() => store.get("resumeOn", true));
+  const [favorite, setFavorite] = useState(false);
+  const [lyrics, setLyrics] = useState<Lyrics | null>(null);
+  const [sleepAt, setSleepAt] = useState<number | null>(null);
+  const [sleepAtEnd, setSleepAtEnd] = useState(false);
+  const [mini, setMini] = useState(false);
+  const listened = useRef({ path: "", ms: 0, last: -1, recorded: false });
   const videoRef = useRef<HTMLDivElement>(null);
   const transportRef = useRef<HTMLElement>(null);
   const prevState = useRef<PlaybackStatus["state"]>("idle");
   const pendingResume = useRef<number | null>(null);
+  const silentResume = useRef(false);
   const hideTimer = useRef<number | undefined>(undefined);
   const overTransport = useRef(false);
 
@@ -81,7 +122,8 @@ export default function App() {
     ? opened.probe.streams.some((s) => s.codec_type === "video" && !s.disposition?.attached_pic)
     : null;
   // Probe when we have it; otherwise trust the engine's video output count.
-  const hasVideo = !!opened && (probedVideo ?? (status.has_video || status.state === "opening"));
+  // With a visualiser, audio-only media also gets a video output to show.
+  const hasVideo = !!opened && ((probedVideo ?? (status.has_video || status.state === "opening")) || (!!cfg.visualizer && status.has_video));
   const playing = isPlayingState(status.state);
   // libVLC reports length 0 before the input starts and after it ends; fall back to the probed duration.
   const lengthMs = status.length_ms || Math.round(Number(opened?.probe?.format.duration ?? 0) * 1000);
@@ -104,7 +146,29 @@ export default function App() {
   useEffect(() => store.set("panelW", panelW), [panelW]);
   useEffect(() => store.set("sideW", sideW), [sideW]);
   useEffect(() => store.set("sideCollapsed", sideCollapsed), [sideCollapsed]);
-  useEffect(() => { engine.diagnostics().then(setDiag); }, []);
+  useEffect(() => store.set("eq", eq), [eq]);
+  useEffect(() => store.set("theme", theme), [theme]);
+  useEffect(() => store.set("accent", accent), [accent]);
+  useEffect(() => store.set("private", privateMode), [privateMode]);
+  useEffect(() => store.set("resumeOn", resumeOn), [resumeOn]);
+  useEffect(() => store.set("audioDevice", device), [device]);
+  useEffect(() => applyTheme(theme, accent), [theme, accent]);
+  useEffect(() => {
+    engine.diagnostics().then(setDiag);
+    api.engineConfig().then(setCfg).catch(() => {});
+    api.equalizerInfo().then((i) => { setEqInfo(i); setEq((e) => (e.bands.length === i.frequencies.length ? e : FLAT_EQ(i.frequencies.length))); }).catch(() => {});
+    api.audioDevices().then(setDevices).catch(() => {});
+    if (device) api.setAudioDevice(device).catch(() => {});
+    const v = store.get<number | null>("volume", null);
+    if (v !== null) engine.setVolume(v).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Equalizer (plus any Lab level-matching gain) follows the stored state.
+  useEffect(() => {
+    if (!eqInfo) return;
+    const on = eq.enabled || labGain !== 0;
+    const base = eq.enabled ? eq : FLAT_EQ(eqInfo.frequencies.length);
+    api.setEqualizer(on ? { preamp: Math.max(-20, Math.min(20, base.preamp + labGain)), bands: base.bands } : null).catch(() => {});
+  }, [eq, labGain, eqInfo]);
   useEffect(() => {
     const onResize = () => setWinW(window.innerWidth);
     window.addEventListener("resize", onResize);
@@ -124,7 +188,8 @@ export default function App() {
   const poll = useCallback(() => {
     engine.status().then((s) => { setStatus(s); setReceivedAt(performance.now()); }).catch(() => {});
   }, []);
-  useEffect(() => { const t = setInterval(poll, 250); return () => clearInterval(t); }, [poll]);
+  const playingNow = isPlayingState(status.state);
+  useEffect(() => { const t = setInterval(poll, playingNow ? 250 : 1000); return () => clearInterval(t); }, [poll, playingNow]);
 
   const refreshDetails = useCallback(() => {
     engine.tracks().then(setTracks).catch(() => {});
@@ -138,10 +203,31 @@ export default function App() {
     return () => clearInterval(t);
   }, [panel, opened]);
 
+  // ---------- listening history ----------
+  const flushPlay = useCallback(() => {
+    const l = listened.current;
+    if (!l.path || l.recorded || privateMode) return;
+    const len = lengthMs || 0;
+    if (l.ms >= 30000 || (len > 0 && l.ms >= len / 2)) {
+      l.recorded = true;
+      api.recordPlay(l.path, l.ms).catch(() => {});
+    }
+  }, [privateMode, lengthMs]);
+  useEffect(() => {
+    const l = listened.current;
+    if (status.state === "playing" && current === l.path) {
+      if (l.last >= 0) { const d = status.time_ms - l.last; if (d > 0 && d < 2000) l.ms += d; }
+      l.last = status.time_ms;
+      flushPlay();
+    } else l.last = -1;
+  }, [status.time_ms]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ---------- loading ----------
-  const loadIndex = useCallback(async (i: number, list: string[]) => {
+  const loadIndex = useCallback(async (i: number, list: string[], startAt?: number) => {
     const src = list[i];
     if (!src) return;
+    flushPlay();
+    listened.current = { path: src, ms: 0, last: -1, recorded: false };
     setIndex(i);
     setError(null);
     setTracks(null);
@@ -152,21 +238,27 @@ export default function App() {
     try {
       const r = await engine.open(src);
       setOpened(r);
-      setView("player");
-      const resume = store.get<Record<string, number>>("resume", {})[src];
+      setView((v) => (v === "lab" || v === "convert" ? v : "player"));
+      const resume = startAt !== undefined ? startAt : resumeOn && !privateMode ? await api.resumeGet(src).catch(() => null) : null;
       pendingResume.current = resume ?? null;
-      setRecents((old) => {
-        const next = [src, ...old.filter((x) => x !== src)].slice(0, 20);
-        store.set("recents", next);
-        return next;
-      });
+      silentResume.current = startAt !== undefined;
+      if (!privateMode) {
+        setRecents((old) => {
+          const next = [src, ...old.filter((x) => x !== src)].slice(0, 20);
+          store.set("recents", next);
+          return next;
+        });
+      }
+      api.mediaRow(src).then((m) => setFavorite(!!m?.favorite)).catch(() => setFavorite(false));
+      setLyrics(null);
+      if (!src.includes("://")) api.lyrics(src).then(setLyrics).catch(() => {});
       setTimeout(refreshDetails, 500);
       setTimeout(refreshDetails, 1800);
       poll();
     } catch (e) {
       setError(`${basename(src)}: ${e}`);
     }
-  }, [refreshDetails, poll]);
+  }, [refreshDetails, poll, flushPlay, resumeOn, privateMode]);
 
   const playSources = useCallback(async (items: string[], append = false) => {
     const expanded = await engine.expand(items);
@@ -245,14 +337,14 @@ export default function App() {
       pendingResume.current = null;
       if (at > 0 && (status.length_ms === 0 || at < status.length_ms - 5000)) {
         engine.seek(at);
-        say(`Resumed at ${formatTime(at)}`, { label: "Start over", run: () => { engine.seek(0); poll(); } });
+        if (!silentResume.current) say(`Resumed at ${formatTime(at)}`, { label: "Start over", run: () => { engine.seek(0); poll(); } });
       }
     }
     if (status.state === "ended" && was !== "ended" && current) {
-      const r = store.get<Record<string, number>>("resume", {});
-      delete r[current];
-      store.set("resume", r);
-      if (repeat === "one") { engine.play(); return; }
+      api.resumeSet(current, null).catch(() => {});
+      flushPlay();
+      if (sleepAtEnd) { setSleepAtEnd(false); say("Sleep timer: stopped"); return; }
+      if (repeat === "one") { listened.current = { path: current, ms: 0, last: -1, recorded: false }; engine.play(); return; }
       const j = nextIndex(1);
       if (j !== null) loadIndex(j, queue);
     }
@@ -265,13 +357,26 @@ export default function App() {
 
   // Remember position for long media (resume on next open).
   useEffect(() => {
-    if (!current || status.state !== "playing" || status.length_ms < 60000) return;
+    if (!current || privateMode || !resumeOn || status.state !== "playing" || status.length_ms < 60000) return;
     if (Math.floor(status.time_ms / 5000) === Math.floor((status.time_ms - 250) / 5000)) return;
-    const r = store.get<Record<string, number>>("resume", {});
-    if (status.time_ms > 10000 && status.time_ms < status.length_ms - 15000) r[current] = status.time_ms;
-    else delete r[current];
-    store.set("resume", r);
+    const keep = status.time_ms > 10000 && status.time_ms < status.length_ms - 15000;
+    api.resumeSet(current, keep ? status.time_ms : null).catch(() => {});
   }, [status.time_ms]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---------- sleep timer: fade the last 10 s, then pause ----------
+  useEffect(() => {
+    if (!sleepAt) return;
+    const startVol = status.volume;
+    const t = setInterval(() => {
+      const left = sleepAt - Date.now();
+      if (left <= 0) {
+        engine.setPaused(true).then(() => engine.setVolume(startVol)).finally(poll);
+        setSleepAt(null);
+        say("Sleep timer: paused");
+      } else if (left < 10000) engine.setVolume(Math.round(startVol * (left / 10000)));
+    }, 500);
+    return () => clearInterval(t);
+  }, [sleepAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------- transport actions ----------
   const act = useCallback((p: Promise<unknown>) => { p.catch((e) => setError(String(e))).finally(poll); }, [poll]);
@@ -287,6 +392,7 @@ export default function App() {
   const setVolume = useCallback((v: number) => {
     const vol = clamp(Math.round(v), 0, 200);
     act(engine.setVolume(vol));
+    store.set("volume", vol);
     if (status.muted && vol > 0) act(engine.setMuted(false));
     say(`Volume ${vol}%`);
   }, [act, status.muted, say]);
@@ -343,6 +449,51 @@ export default function App() {
   }, []);
   const openPanel = useCallback((t: PanelTab) => setPanel((p) => (p === t ? null : t)), []);
 
+  const applyConfig = useCallback(async (next: EngineConfig) => {
+    setCfg(next);
+    try {
+      const restarted = await api.configure(next);
+      if (restarted && opened) { say("Engine options applied"); setTimeout(refreshDetails, 600); }
+    } catch (e) { setError("Engine rejected these options: " + e); }
+    poll();
+  }, [opened, refreshDetails, poll, say]);
+  const toggleFavorite = useCallback(() => {
+    if (!current) return;
+    const f = !favorite;
+    setFavorite(f);
+    api.setFavorite(current, f).then(() => say(f ? "Added to favourites" : "Removed from favourites")).catch((e) => setError(String(e)));
+  }, [current, favorite, say]);
+  const toggleMini = useCallback(async (force?: boolean) => {
+    const w = getCurrentWindow();
+    const nextMini = force ?? !mini;
+    if (nextMini) {
+      const sz = await w.innerSize();
+      const k = await w.scaleFactor();
+      store.set("normalSize", [sz.width / k, sz.height / k]);
+      if (fullscreen) { await w.setFullscreen(false); setFullscreen(false); }
+      await w.setSize(new LogicalSize(420, hasVideo ? 300 : 160));
+      await w.setAlwaysOnTop(true);
+      setPanel(null);
+    } else {
+      const [ww, hh] = store.get<[number, number]>("normalSize", [1200, 760]);
+      await w.setAlwaysOnTop(false);
+      await w.setSize(new LogicalSize(ww, hh));
+    }
+    setMini(nextMini);
+  }, [mini, fullscreen, hasVideo]);
+  const actions: PlayActions = useMemo(() => ({
+    play: (items: string[], start = 0) => { if (!items.length) return; setQueue(items); loadIndex(start, items); },
+    enqueue: (items: string[]) => {
+      setQueue((q) => [...q, ...items]);
+      if (!opened && items.length) loadIndex(queue.length, [...queue, ...items]);
+    },
+    say: (t: string) => say(t),
+  }), [loadIndex, opened, queue, say]);
+  const openAt = useCallback((path: string, ms: number) => {
+    const i = queue.indexOf(path);
+    if (i >= 0) loadIndex(i, queue, ms); else { setQueue([path]); loadIndex(0, [path], ms); }
+  }, [queue, loadIndex]);
+
   // ---------- fullscreen auto-hide ----------
   const wake = useCallback(() => {
     setControlsShown(true);
@@ -394,6 +545,8 @@ export default function App() {
           items: [null, "blend", "yadif", "yadif2x", "bob", "linear"].map((m) => ({ text: m ?? "Off", checked: deinterlace === m, action: () => applyDeinterlace(m) })),
         },
         { text: "Take snapshot", enabled: hasVideo, action: snapshot },
+        { text: favorite ? "Remove from favourites" : "Add to favourites", enabled: !!current, action: toggleFavorite },
+        { text: mini ? "Leave mini player" : "Mini player", action: () => toggleMini() },
         { item: "Separator" },
         { text: "Open file…", action: pickFiles },
         { text: "Open folder…", action: pickFolder },
@@ -402,13 +555,19 @@ export default function App() {
         { text: "Media information", action: () => setPanel("info") },
         { text: "Queue", action: () => setPanel("queue") },
         { text: "Synchronisation…", action: () => setPanel("tune") },
+        { text: "Equalizer…", action: () => setPanel("audio") },
+        { text: "Picture…", action: () => setPanel("picture") },
       ],
     };
     const m = await Menu.new(items);
     await m.popup();
-  }, [tracks, playing, togglePlay, opened, act, queue.length, prev, next, fullscreen, toggleFullscreen, status.rate, setRate, refreshDetails, pickSubtitle, hasVideo, aspect, applyAspect, deinterlace, applyDeinterlace, snapshot, pickFiles, pickFolder]);
+  }, [tracks, playing, togglePlay, opened, act, queue.length, prev, next, fullscreen, toggleFullscreen, status.rate, setRate, refreshDetails, pickSubtitle, hasVideo, aspect, applyAspect, deinterlace, applyDeinterlace, snapshot, pickFiles, pickFolder, favorite, current, toggleFavorite, mini, toggleMini]);
 
   // ---------- native surface + window drag & drop ----------
+  const pollRef = useRef(poll);
+  pollRef.current = poll;
+  const refreshRef = useRef(refreshDetails);
+  refreshRef.current = refreshDetails;
   const handlers = useRef({ togglePlay, toggleFullscreen, showMenu, setVolume, handleDropped, wake, status });
   handlers.current = { togglePlay, toggleFullscreen, showMenu, setVolume, handleDropped, wake, status };
   useEffect(() => {
@@ -424,17 +583,23 @@ export default function App() {
         case "drop": h.handleDropped(e.paths); break;
       }
     });
+    const unEngine = listen<EngineEvent>("engine", ({ payload }) => {
+      pollRef.current();
+      if (payload === "tracks" || payload === "vout" || payload === "length") refreshRef.current();
+    });
     const unDrop = getCurrentWebview().onDragDropEvent((e) => {
       const p = e.payload;
       if (p.type === "enter" || p.type === "over") setDragOver(true);
       else if (p.type === "leave") setDragOver(false);
       else if (p.type === "drop") { setDragOver(false); handlers.current.handleDropped(p.paths); }
     });
-    return () => { unSurface.then((f) => f()); unDrop.then((f) => f()); };
+    return () => { unSurface.then((f) => f()); unDrop.then((f) => f()); unEngine.then((f) => f()); };
   }, []);
 
   // ---------- keep the native video surface glued to the reserved box ----------
   const surfaceVisible = view === "player" && hasVideo && !urlOpen && !dragOver && !panelTakesOver;
+  // Fullscreen and the mini player always show the player.
+  useEffect(() => { if (fullscreen || mini) setView("player"); }, [fullscreen, mini]);
   const clipControls = fullscreen && controlsShown;
   useLayoutEffect(() => {
     const el = videoRef.current;
@@ -471,13 +636,15 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tgt = e.target as HTMLElement;
-      if (tgt.closest("input[type=text], input[type=url], textarea, select")) return;
+      if (tgt.closest("input[type=text], input[type=url], input[type=number], textarea, select")) return;
       const k = e.key;
       const ctrl = e.ctrlKey || e.metaKey;
       wake();
       if (ctrl && k.toLowerCase() === "o") { e.preventDefault(); e.shiftKey ? pickFolder() : pickFiles(); return; }
       if (ctrl && k.toLowerCase() === "n") { e.preventDefault(); setUrlOpen(true); return; }
       if (ctrl && k.toLowerCase() === "q") { e.preventDefault(); getCurrentWindow().close(); return; }
+      if (ctrl && k.toLowerCase() === "l") { e.preventDefault(); setView("library"); return; }
+      if (ctrl && k.toLowerCase() === "f") { e.preventDefault(); toggleFavorite(); return; }
       if (ctrl && k === "ArrowUp") { e.preventDefault(); setVolume(status.volume + 5); return; }
       if (ctrl && k === "ArrowDown") { e.preventDefault(); setVolume(status.volume - 5); return; }
       if (ctrl || e.altKey) return;
@@ -485,7 +652,7 @@ export default function App() {
       switch (k) {
         case " ": togglePlay(); break; // preventDefault below also stops a focused button re-firing
         case "f": case "F": case "F11": toggleFullscreen(); break;
-        case "Escape": if (fullscreen) toggleFullscreen(false); else if (urlOpen) setUrlOpen(false); else handled = false; break;
+        case "Escape": if (fullscreen) toggleFullscreen(false); else if (urlOpen) setUrlOpen(false); else if (mini) toggleMini(false); else handled = false; break;
         case "ArrowLeft": seekBy(e.shiftKey ? -3000 : -10000); break;
         case "ArrowRight": seekBy(e.shiftKey ? 3000 : 10000); break;
         case "ArrowUp": setVolume(status.volume + 5); break;
@@ -570,8 +737,8 @@ export default function App() {
               <button className="nav-item" onClick={() => setUrlOpen(true)} title="Open network stream (Ctrl+N)"><Icon name="network" /><span className="nav-label">Network stream</span></button>
               <div className="nav-sep" />
               {NAV.map((n) => (
-                <button key={n.id} className="nav-item" disabled title={`${n.label} — planned for phase ${n.phase}`}>
-                  <Icon name={n.icon} /><span className="nav-label">{n.label}</span><span className="soon">P{n.phase}</span>
+                <button key={n.id} className="nav-item" aria-current={view === n.id ? "page" : undefined} onClick={() => setView(n.id)} title={n.label}>
+                  <Icon name={n.icon} /><span className="nav-label">{n.label}</span>
                 </button>
               ))}
               <div className="spacer" />
@@ -593,11 +760,24 @@ export default function App() {
             )}
             {iamf && (
               <div className="banner info" role="status">
-                Immersive audio (IAMF / Eclipsa) detected. libVLC 3 cannot decode or render it; inspection works, playback arrives with the Immersive Audio Lab.
+                <span>Immersive audio (IAMF / Eclipsa) detected. libVLC 3 plays only one substream as plain audio; the mix is not rendered.</span>
+                <button className="btn small" onClick={() => setView("lab")}>Open in Audio Lab</button>
               </div>
             )}
             {view === "settings" ? (
-              <Settings diag={diag} />
+              <SettingsPage diag={diag} cfg={cfg} onCfg={applyConfig} theme={theme} onTheme={setTheme} accent={accent} onAccent={setAccent}
+                devices={devices} device={device} onDevice={(id) => { setDevice(id); api.setAudioDevice(id).catch(() => {}); }}
+                privateMode={privateMode} onPrivate={setPrivateMode} resume={resumeOn} onResume={setResumeOn} onMini={() => toggleMini(true)} />
+            ) : view === "library" ? <LibraryPage actions={actions} />
+            : view === "music" ? <MusicPage actions={actions} />
+            : view === "videos" ? <VideosPage actions={actions} />
+            : view === "playlists" ? <PlaylistsPage actions={actions} queue={queue} />
+            : view === "network" ? <NetworkPage actions={actions} />
+            : view === "stats" ? <StatsPage privateMode={privateMode} setPrivateMode={setPrivateMode} />
+            : view === "lab" ? (
+              <LabPage current={current} timeMs={status.time_ms} onAudition={openAt} onSeek={seekTo} onLevel={setLabGain} say={say} />
+            ) : view === "convert" ? (
+              <ConvertPage current={current} timeMs={status.time_ms} say={say} onPlay={(p) => actions.play([p])} />
             ) : !opened ? (
               <div className="empty">
                 <h1>Play anything.</h1>
@@ -628,6 +808,7 @@ export default function App() {
                 <div className="hero-text">
                   <h1>{title}</h1>
                   <div className="sub">{subtitle}</div>
+                  {lyrics && <LyricsView lyrics={lyrics} timeMs={status.time_ms} onSeek={seekTo} />}
                 </div>
               </div>
             )}
@@ -641,9 +822,9 @@ export default function App() {
             {!tiny && <div className="splitter" onPointerDown={startResize("panel")} role="separator" aria-orientation="vertical" aria-label="Resize panel" />}
             <aside className="panel" style={{ width: tiny ? "100%" : panelW }}>
               <div className="tabs" role="tablist">
-                {(["queue", "info", "tune"] as PanelTab[]).map((t) => (
+                {PANEL_TABS.map(([t, l]) => (
                   <button key={t} role="tab" aria-selected={panel === t} className="tab" onClick={() => setPanel(t)}>
-                    {t === "queue" ? `Queue${queue.length ? ` · ${queue.length}` : ""}` : t === "info" ? "Info" : "Tune"}
+                    {t === "queue" && queue.length ? l + " · " + queue.length : l}
                   </button>
                 ))}
                 <span className="spacer" />
@@ -671,7 +852,20 @@ export default function App() {
                   <TunePanel status={status} aspect={aspect} deinterlace={deinterlace} hasVideo={hasVideo}
                     onDelay={delay} onRate={setRate} onAspect={applyAspect} onDeinterlace={applyDeinterlace}
                     onAddSubtitle={pickSubtitle} onSnapshot={snapshot}
-                    onChapter={(c) => act(engine.setChapter(c))} />
+                    onChapter={(c) => act(engine.setChapter(c))}>
+                    <SleepTimer endsAt={sleepAt} atEnd={sleepAtEnd}
+                      onSet={(m, atEnd) => { setSleepAt(m ? Date.now() + m * 60000 : null); setSleepAtEnd(!!atEnd); if (m) say("Sleep timer: " + m + " min"); }} />
+                  </TunePanel>
+                )}
+                {panel === "audio" && (
+                  <AudioPanel info={eqInfo} eq={eq} onEq={setEq} devices={devices} device={device}
+                    onDevice={(id) => { setDevice(id); api.setAudioDevice(id).catch(() => {}); }}
+                    normalize={cfg.normalize} onNormalize={(v) => applyConfig({ ...cfg, normalize: v })} />
+                )}
+                {panel === "picture" && (
+                  <PicturePanel adjust={adjust} onAdjust={(a) => { setAdjust(a); api.setVideoAdjust(a).catch(() => {}); }}
+                    crop={crop} onCrop={(c) => { setCrop(c); api.setCrop(c).catch(() => {}); }}
+                    transform={cfg.transform} onTransform={(t) => applyConfig({ ...cfg, transform: t })} hasVideo={hasVideo} />
                 )}
               </div>
             </aside>
@@ -708,6 +902,9 @@ export default function App() {
           </div>
 
           <div className="right">
+            <button className="icon-btn hide-xs" onClick={toggleFavorite} disabled={!current} aria-pressed={favorite} aria-label={favorite ? "Remove from favourites" : "Add to favourites"} title="Favourite (Ctrl+F)">
+              <Icon name="heart" filled={favorite} />
+            </button>
             <button className="chip hide-sm" onClick={() => setRate(status.rate === 1 ? 1.5 : 1)} title="Speed — [ ] to step, = to reset" disabled={!opened}>{Number(status.rate.toFixed(2))}×</button>
             <button className="icon-btn" onClick={toggleMute} aria-pressed={status.muted} aria-label={status.muted ? "Unmute" : "Mute"} title="Mute (M)">
               <Icon name={effVolume === 0 ? "mute" : "volume"} />
@@ -747,31 +944,21 @@ function UrlDialog({ onOpen, onClose }: { onOpen: (u: string) => void; onClose: 
   );
 }
 
-function Settings({ diag }: { diag: Diagnostics | null }) {
+function LyricsView({ lyrics, timeMs, onSeek }: { lyrics: Lyrics; timeMs: number; onSeek: (ms: number) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  let idx = -1;
+  for (let i = 0; i < lyrics.synced.length && lyrics.synced[i][0] <= timeMs + 150; i++) idx = i;
+  useEffect(() => {
+    const el = ref.current?.querySelector<HTMLElement>(".ly.on");
+    if (el && ref.current) ref.current.scrollTo({ top: el.offsetTop - ref.current.clientHeight / 2 + el.clientHeight / 2, behavior: "smooth" });
+  }, [idx]);
   return (
-    <section className="page">
-      <h1>Engine & compatibility</h1>
-      <div className="inspector flat">
-        <h2>Playback engine</h2>
-        <dl className="kv">
-          <dt>Engine</dt><dd>{diag?.engine ? `${diag.engine.name} ${diag.engine.version}` : "Not loaded"}</dd>
-          {diag?.engine && (<><dt>Location</dt><dd>{diag.engine.location}</dd></>)}
-          {diag?.engine_error && (<><dt>Error</dt><dd>{diag.engine_error}</dd></>)}
-        </dl>
-        <h2>Inspection</h2>
-        <dl className="kv"><dt>ffprobe</dt><dd>{diag?.ffprobe ?? "Not found on PATH"}</dd></dl>
-        <h2>Keyboard</h2>
-        <dl className="kv">
-          {[
-            ["Space", "Play / pause"], ["F, F11, double-click", "Fullscreen"], ["Esc", "Leave fullscreen"],
-            ["← / →", "Seek 10 s (Shift: 3 s)"], ["↑ / ↓, wheel", "Volume"], ["M", "Mute"], ["N / P", "Next / previous"],
-            ["[ ] =", "Speed down / up / reset"], [". or E", "Next frame"], ["J / K", "Audio delay −/+ 50 ms"],
-            ["G / H", "Subtitle delay −/+ 50 ms"], ["B / V", "Cycle audio / subtitle track"], ["A", "Cycle aspect ratio"],
-            ["L / R", "Repeat / shuffle"], ["0–9", "Jump to 0–90 %"], ["Shift+S", "Snapshot"], ["Q / I / T", "Queue / info / tune panel"],
-            ["Ctrl+O, Ctrl+Shift+O, Ctrl+N", "Open files / folder / stream"],
-          ].map(([k, v]) => (<Fragment key={k}><dt>{k}</dt><dd>{v}</dd></Fragment>))}
-        </dl>
-      </div>
-    </section>
+    <div className="lyrics" ref={ref} aria-label={"Lyrics (" + lyrics.source + ")"}>
+      {lyrics.synced.length
+        ? lyrics.synced.map(([t, line], i) => (
+          <button key={i} className={"ly" + (i === idx ? " on" : "")} onClick={() => onSeek(t)}>{line || "♪"}</button>
+        ))
+        : <pre className="ly-plain">{lyrics.plain}</pre>}
+    </div>
   );
 }

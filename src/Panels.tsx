@@ -1,3 +1,4 @@
+import type React from "react";
 import { ASPECTS, RATES, basename, type PlaybackStatus } from "./engine";
 import { Icon } from "./icons";
 
@@ -49,6 +50,7 @@ export function TunePanel(p: {
   onDelay: (k: "audio" | "subtitle", d: number) => void; onRate: (r: number) => void;
   onAspect: (a: string) => void; onDeinterlace: (m: string | null) => void;
   onAddSubtitle: () => void; onSnapshot: () => void; onChapter: (c: number) => void;
+  children?: React.ReactNode;
 }) {
   const s = p.status;
   const live = s.state !== "idle" && s.state !== "stopped";
@@ -96,6 +98,119 @@ export function TunePanel(p: {
           </div>
         </>
       )}
+      {p.children}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- audio: equalizer + output
+
+export interface EqState { enabled: boolean; preset: string; preamp: number; bands: number[] }
+
+export function AudioPanel(p: {
+  info: import("./engine").EqualizerInfo | null; eq: EqState; onEq: (eq: EqState) => void;
+  devices: import("./engine").AudioDevice[]; device: string; onDevice: (id: string) => void;
+  normalize: boolean; onNormalize: (v: boolean) => void;
+}) {
+  const freqs = p.info?.frequencies ?? [];
+  const label = (f: number) => (f >= 1000 ? `${f / 1000}k` : `${Math.round(f)}`);
+  const set = (patch: Partial<EqState>) => p.onEq({ ...p.eq, ...patch, enabled: true });
+  return (
+    <div className="tune">
+      <h2>Equalizer</h2>
+      <div className="row">
+        <label className="check"><input type="checkbox" checked={p.eq.enabled} onChange={(e) => p.onEq({ ...p.eq, enabled: e.target.checked })} /> On</label>
+        <select className="select" aria-label="Preset" value={p.eq.preset} onChange={(e) => {
+          const pr = p.info?.presets.find(([n]) => n === e.target.value);
+          if (pr) set({ preset: pr[0], preamp: pr[1].preamp, bands: pr[1].bands });
+        }}>
+          <option value="Custom">Custom</option>
+          {p.info?.presets.map(([n]) => <option key={n} value={n}>{n}</option>)}
+        </select>
+        <button className="btn small" onClick={() => set({ preset: "Flat", preamp: 0, bands: freqs.map(() => 0) })}>Reset</button>
+      </div>
+      <div className={`eq${p.eq.enabled ? "" : " off"}`}>
+        <div className="eq-band">
+          <input type="range" min={-20} max={20} step={0.5} value={p.eq.preamp} aria-label="Preamp"
+            onChange={(e) => set({ preamp: Number(e.target.value), preset: "Custom" })} />
+          <span className="eq-v">{p.eq.preamp > 0 ? "+" : ""}{p.eq.preamp.toFixed(1)}</span><span className="eq-f">pre</span>
+        </div>
+        {freqs.map((f, i) => (
+          <div key={f} className="eq-band">
+            <input type="range" min={-20} max={20} step={0.5} value={p.eq.bands[i] ?? 0} aria-label={`${label(f)} Hz`}
+              onChange={(e) => { const b = [...p.eq.bands]; b[i] = Number(e.target.value); set({ bands: b, preset: "Custom" }); }} />
+            <span className="eq-v">{(p.eq.bands[i] ?? 0).toFixed(1)}</span><span className="eq-f">{label(f)}</span>
+          </div>
+        ))}
+      </div>
+      <h2>Loudness</h2>
+      <label className="check"><input type="checkbox" checked={p.normalize} onChange={(e) => p.onNormalize(e.target.checked)} /> Volume normalisation (restarts playback at the same position)</label>
+      <h2>Output device</h2>
+      <select className="select wide" aria-label="Audio output device" value={p.device} onChange={(e) => p.onDevice(e.target.value)}>
+        <option value="">System default</option>
+        {p.devices.filter((d) => d.id).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+      </select>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- picture: adjust, crop, rotation
+
+export const NEUTRAL: import("./engine").VideoAdjust = { brightness: 1, contrast: 1, hue: 0, saturation: 1, gamma: 1 };
+
+export function PicturePanel(p: {
+  adjust: import("./engine").VideoAdjust | null; onAdjust: (a: import("./engine").VideoAdjust | null) => void;
+  crop: string | null; onCrop: (c: string | null) => void;
+  transform: string; onTransform: (t: string) => void; hasVideo: boolean;
+}) {
+  const a = p.adjust ?? NEUTRAL;
+  const sliders: [keyof typeof a, string, number, number, number][] = [
+    ["brightness", "Brightness", 0, 2, 0.01], ["contrast", "Contrast", 0, 2, 0.01], ["saturation", "Saturation", 0, 3, 0.01],
+    ["hue", "Hue", -180, 180, 1], ["gamma", "Gamma", 0.01, 3, 0.01],
+  ];
+  return (
+    <div className="tune">
+      <h2>Adjust</h2>
+      {sliders.map(([k, l, min, max, step]) => (
+        <div key={k} className="slider-row">
+          <span className="stepper-label">{l}</span>
+          <input type="range" min={min} max={max} step={step} value={a[k]} disabled={!p.hasVideo} aria-label={l}
+            style={{ ["--fill" as string]: `${((a[k] - min) / (max - min)) * 100}%` }}
+            onChange={(e) => p.onAdjust({ ...a, [k]: Number(e.target.value) })} />
+          <span className="stepper-value">{a[k].toFixed(k === "hue" ? 0 : 2)}</span>
+        </div>
+      ))}
+      <button className="btn small" disabled={!p.adjust} onClick={() => p.onAdjust(null)}>Reset picture</button>
+      <h2>Crop</h2>
+      <div className="chips">
+        {[null, "16:9", "4:3", "21:9", "2.39:1", "1:1", "16:10"].map((c) => (
+          <button key={c ?? "none"} className={`chip${p.crop === c ? " on" : ""}`} disabled={!p.hasVideo} onClick={() => p.onCrop(c)}>{c ?? "No crop"}</button>
+        ))}
+      </div>
+      <h2>Rotate &amp; flip</h2>
+      <div className="chips">
+        {[["", "None"], ["90", "90°"], ["180", "180°"], ["270", "270°"], ["hflip", "Mirror"], ["vflip", "Flip"]].map(([v, l]) => (
+          <button key={v} className={`chip${p.transform === v ? " on" : ""}`} onClick={() => p.onTransform(v)}>{l}</button>
+        ))}
+      </div>
+      <p className="muted small">Rotation restarts playback at the same position and decodes in software (libVLC 3 cannot rotate GPU frames).</p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- sleep timer
+
+export function SleepTimer({ endsAt, atEnd, onSet }: { endsAt: number | null; atEnd: boolean; onSet: (min: number | null, atEnd?: boolean) => void }) {
+  const left = endsAt ? Math.max(0, Math.round((endsAt - Date.now()) / 60000)) : null;
+  return (
+    <>
+      <h2>Sleep timer</h2>
+      <div className="chips">
+        {[15, 30, 45, 60, 90].map((m) => <button key={m} className="chip" onClick={() => onSet(m)}>{m} min</button>)}
+        <button className={`chip${atEnd ? " on" : ""}`} onClick={() => onSet(null, true)}>End of item</button>
+        <button className="chip" disabled={!endsAt && !atEnd} onClick={() => onSet(null)}>Off</button>
+      </div>
+      <p className="muted small">{atEnd ? "Stops when the current item ends." : endsAt ? `Fades out and pauses in ${left} min.` : "Off"}</p>
+    </>
   );
 }

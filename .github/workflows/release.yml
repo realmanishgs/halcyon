@@ -22,7 +22,7 @@ jobs:
             args: ""
           - platform: macos-latest # Apple silicon
             args: "--target aarch64-apple-darwin"
-          - platform: macos-13 # Intel
+          - platform: macos-latest # Intel, cross-compiled on Apple silicon
             args: "--target x86_64-apple-darwin"
           - platform: ubuntu-22.04
             args: ""
@@ -54,9 +54,11 @@ jobs:
       - name: Type-check frontend
         run: npx tsc --noEmit
 
-      - name: Unit tests that need no media engine
+      # Everything except the libVLC engine tests (runners have no VLC). Lab and
+      # converter tests run where the runner has FFmpeg and skip otherwise.
+      - name: Tests (storage, parsers, fuzzing, lab, converter)
         working-directory: src-tauri
-        run: cargo test --lib sources
+        run: cargo test --lib -- fuzz db:: sources:: library:: lab:: convert::
 
       - uses: tauri-apps/tauri-action@v0
         id: tauri
@@ -80,9 +82,13 @@ jobs:
           releaseDraft: true
           args: ${{ matrix.args }}
 
+      - name: SBOM (CycloneDX)
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: node scripts/sbom.mjs sbom.cdx.json
+
       - uses: actions/upload-artifact@v4
         with:
-          name: halcyon-${{ matrix.platform }}
+          name: halcyon-${{ matrix.platform }}-${{ strategy.job-index }}
           path: |
             src-tauri/target/**/release/bundle/**/*.msi
             src-tauri/target/**/release/bundle/**/*.exe
@@ -90,4 +96,5 @@ jobs:
             src-tauri/target/**/release/bundle/**/*.deb
             src-tauri/target/**/release/bundle/**/*.rpm
             src-tauri/target/**/release/bundle/**/*.AppImage
+            sbom.cdx.json
           if-no-files-found: warn

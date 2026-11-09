@@ -115,9 +115,11 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
+        // Work on bytes: slicing the &str here could split a multi-byte character.
         if b[i] == b'%' && i + 2 < b.len() {
-            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(v);
+            let hex = |c: u8| (c as char).to_digit(16);
+            if let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2])) {
+                out.push((h * 16 + l) as u8);
                 i += 3;
                 continue;
             }
@@ -159,6 +161,14 @@ mod tests {
     fn m3u_skips_comments_and_blank_lines() {
         let t = "#EXTM3U\n#EXTINF:12,Song\nsong.mp3\n\n  https://example.com/live.m3u8 \n";
         assert_eq!(parse_m3u(t), vec!["song.mp3", "https://example.com/live.m3u8"]);
+    }
+
+    #[test]
+    fn percent_decoding_survives_non_ascii_after_percent() {
+        // Found by fuzz::playlist_files_on_disk_never_panic: used to panic on a char boundary.
+        assert_eq!(percent_decode("a%\u{1538}b%41"), "a%\u{1538}bA");
+        assert_eq!(percent_decode("%"), "%");
+        assert_eq!(percent_decode("x%4"), "x%4");
     }
 
     #[test]

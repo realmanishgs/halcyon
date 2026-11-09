@@ -1,6 +1,6 @@
 # Feature & format matrix
 
-Measured on Windows 11 x64 · libVLC 3.0.24 · ffprobe 9.0.1 · Intel Arc 140T · 2026-11-08.
+Measured on Windows 11 x64 · libVLC 3.0.24 · FFmpeg 9.0.1 · Intel Arc 140T · 2026-11-08 (formats) and 2026-11-09 (phases 2–7).
 Legend: **✅ Verified** (automated test on real media) · **🟡 Partial** (plays, with a stated gap) ·
 **❌ Not supported** (fails cleanly, verified) · **⚪ Planned**.
 Format rows come from the stress suite (`cargo test --lib stress -- --ignored`, report in
@@ -81,8 +81,8 @@ The app shows a banner whenever IAMF is detected so users are not misled.
 | ✅ | Fullscreen, auto-hide, Esc, wheel volume, native context menu, resizable/stretchable layout to 420×300 | manual UI run |
 | 🟡 | Drop onto the web UI area | Tauri's built-in handler (same code path after the event); automated OLE drag could not be injected in this environment — please confirm by dragging from Explorer |
 | ✅ | No memory growth across 100 open/stop cycles over 75 formats | private bytes 156 → 122 MB (stress torture, 2026-11-08) |
-| ⚪ | Network streams | UI + `libvlc_media_new_location` wired; no network test run (no external hosts contacted) |
-| ⚪ | Library, playlists persistence, EQ, conversion, Immersive Audio Lab | ROADMAP |
+| ✅ | Network streams over HTTP with range seeks | `streams_over_http_with_seeking` (local test server; no external hosts) |
+
 
 ## Platforms
 
@@ -90,3 +90,66 @@ The app shows a banner whenever IAMF is detected so users are not misled.
 |---|---|
 | Windows 10/11 x64 | ✅ development target |
 | macOS / Linux | ⚪ engine adapter is portable; the native video surface (`surface.rs`) is Windows-only today |
+
+## Library, playlists, history (Phase 2–3, 6)
+
+| Status | Feature | Evidence |
+|---|---|---|
+| ✅ | SQLite store: settings, library, playlists, resume points, history | `db::tests` (7) |
+| ✅ | Library indexing from ffprobe tags (container + Ogg/Opus stream tags), incremental by size + mtime, 4 workers | `library::tests`, manual scan |
+| ✅ | Albums (cover art: sidecar image or embedded picture), artists, songs, videos, search, sort, favourites | `albums_artists_and_track_order`, UI review (mock backend) |
+| ✅ | Manual playlists (reorder, add, export M3U8/XSPF, import) and smart playlists (12 fields, all/any, limit, sort) | `smart_playlists_filter_and_reject_unknown_fields`, `exported_playlists_read_back` |
+| ✅ | Listening stats (play counted after 30 s or half the item), private session, clear history | `favourites_history_and_stats` |
+| ✅ | Lyrics: sidecar `.lrc`/`.txt` or embedded tags, synchronised highlight, click to seek | `lrc_parsing_handles_multi_stamps_and_offset` |
+| ⚪ | Protected (PIN) profiles | not built — needs a decision on what a profile restricts |
+
+## Audio, picture, engine options (Phase 4)
+
+| Status | Feature | Evidence |
+|---|---|---|
+| ✅ | 10-band equalizer + 18 libVLC presets, preamp | `equalizer_adjust_crop_and_devices` |
+| ✅ | Output device selection (WASAPI devices) | enumerated by the engine; headless tests use a dummy output |
+| ✅ | Volume normalisation, ReplayGain, visualisers (spectrum, scope, VU, spectrometer, goom) | `reconfigure_keeps_position_and_accepts_every_option` |
+| ✅ | Brightness, contrast, hue, saturation, gamma; crop presets | `equalizer_adjust_crop_and_devices` |
+| ✅ | Rotate 90/180/270, mirror, flip (software decoding + OpenGL output; frames displayed on the real output) | `rotation_decodes_in_software_and_displays` |
+| ✅ | Hardware decoding on/off actually takes effect | media option `:avcodec-hw` (instance option is ignored by libVLC 3 — measured) |
+| ✅ | Subtitle style: size, colour, outline, background, margin | options accepted by libVLC (test); rendering not yet checked by eye |
+| ✅ | Sleep timer (fade + pause, or end of item), mini player (always on top), accent picker, themes | UI review (mock backend); window behaviour not yet checked by eye |
+
+## Network (Phase 4)
+
+| Status | Feature | Evidence |
+|---|---|---|
+| ✅ | Browse folders as locations (same code path as SMB/FTP/SFTP/NFS shares) | `browses_a_local_folder_as_a_location` |
+| ✅ | Unreachable shares fail fast (< 4 s), no hang | same test |
+| ✅ | UPnP / mDNS discovery services listed and runnable | same test (no servers on the test LAN, so no results asserted) |
+| 🟡 | Real SMB/UPnP servers | not tested — none available here |
+
+## Conversion (Phase 4)
+
+| Status | Feature | Evidence |
+|---|---|---|
+| ✅ | 9 presets (MP4 H.264/HEVC, WebM VP9, MKV remux, MP3, M4A AAC, Opus, FLAC, WAV), trim, scale, loudness normalisation, progress, cancel with cleanup | `converts_real_media_with_every_preset`, `args_trim_scale_and_normalise` |
+
+## Immersive Audio Lab (Phase 5)
+
+| Status | Feature | Evidence |
+|---|---|---|
+| ✅ | Integrated loudness, LRA, momentary, short-term (BS.1770-4 / EBU R128) | EBU 1 kHz −23 dBFS → −23.0 LUFS ±0.1; 5.1 dynamic material within 0.2 LU of FFmpeg `ebur128` |
+| ✅ | True peak (4× oversampled), sample peak, per-channel RMS and DC offset | inter-sample peak test (fs/4 at 45°): true peak within 0.2 dB, sample peak −3 dB lower |
+| ✅ | Clipping (runs ≥ 3 samples at full scale) and silence (≤ −60 dBFS for ≥ 2 s) with timestamps | `finds_clipping_and_silence` |
+| ✅ | Timeline graph synced to the playhead, click to play from a point, JSON/CSV reports | UI review (mock backend) |
+| ✅ | IAMF stream groups shown; each substream measured and auditioned; A/B with level matching | UI review; substream decode uses FFmpeg |
+| ⏸ | IAMF mix rendering (demixing, ambisonics, binaural), AOM conformance vectors | needs libiamf (not built yet) |
+| ⏭ | Live meters during playback | needs an audio tap; measurements are offline today |
+
+## Production (Phase 7)
+
+| Status | Item | Evidence |
+|---|---|---|
+| ✅ | Packages for Windows (MSI, NSIS), macOS (DMG arm64; x64 cross-built), Linux (DEB, RPM, AppImage) | GitHub Actions `release.yml` |
+| ✅ | CycloneDX SBOM | `scripts/sbom.mjs` (482 components) |
+| ✅ | Randomised parser robustness tests | `src/fuzz.rs` (5 targets, ~100 k inputs; found 1 crash, fixed) |
+| ✅ | Accessibility: names, labels, headings, keyboard focus, WCAG AA contrast | in-browser DOM audit, 10 pages × 2 themes, clean after token fix |
+| ✅ | Cold start < 1 s, idle CPU < 1 % | `scripts/perf-check.ps1`: 548–869 ms, 0.02 % |
+| ⏸ | Code signing, curated LGPL plugin bundle | need certificates / licence decision |

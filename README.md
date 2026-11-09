@@ -23,6 +23,16 @@ Immersive Audio Lab for IAMF inspection and rendering (planned), and a restraine
 - **Inspection:** container + every stream via out-of-process ffprobe, HDR10/HLG/Dolby/DTS/hi-res
   badges, IAMF stream groups, live decoder statistics (decoded/lost frames, bitrate).
 - **Native right-click menu** over the video (speed, tracks, subtitles, aspect, deinterlace, snapshot, open…).
+- **Library:** index folders (tags via ffprobe), albums with covers, artists, songs, videos, search, favourites.
+- **Playlists:** manual and smart (rules), import/export M3U8/XSPF, save the queue.
+- **Audio & picture:** 10-band EQ with presets, normalisation, ReplayGain, output device; brightness/contrast/
+  hue/saturation/gamma, crop, rotate/flip; subtitle styling; visualisers; hardware-decoding switch.
+- **Network:** stream URLs, browse SMB/FTP/SFTP/NFS shares, UPnP/mDNS discovery.
+- **Convert:** FFmpeg presets (MP4/WebM/MKV remux/MP3/AAC/Opus/FLAC/WAV), trim, scale, loudness normalisation.
+- **Immersive Audio Lab:** EBU R128 / BS.1770-4 loudness, LRA, true peak, clipping and silence detection,
+  timeline, JSON/CSV reports, IAMF substream inspection and A/B. (IAMF mix rendering needs libiamf — not built.)
+- **Experience:** sleep timer, synced lyrics (LRC/embedded), listening stats (local), private session, mini player,
+  themes and accent colours.
 
 Measured support for 78 formats (including 4K/8K, HDR, Dolby, DTS, hi-res audio and IAMF) is in
 [FEATURE_MATRIX.md](FEATURE_MATRIX.md); the full machine-generated run is `test-media/STRESS_REPORT.md`.
@@ -32,7 +42,8 @@ Measured support for 78 formats (including 4K/8K, HDR, Dolby, DTS, hi-res audio 
 `Space` play/pause · `F`/`F11`/double-click fullscreen · `Esc` leave · `←/→` ±10 s (`Shift` ±3 s) ·
 `↑/↓`/wheel volume · `M` mute · `N/P` next/previous · `[ ] =` speed · `.` frame · `J/K` audio delay ·
 `G/H` subtitle delay · `B/V` cycle audio/subtitle · `A` aspect · `L` repeat · `R` shuffle · `0–9` jump ·
-`Shift+S` snapshot · `Q/I/T` queue/info/tune · `Ctrl+O` files · `Ctrl+Shift+O` folder · `Ctrl+N` stream.
+`Shift+S` snapshot · `Q/I/T` queue/info/tune · `Ctrl+O` files · `Ctrl+Shift+O` folder · `Ctrl+N` stream ·
+`Ctrl+L` library · `Ctrl+F` favourite.
 
 ## Requirements (development, Windows 10/11 x64)
 
@@ -75,6 +86,10 @@ bash scripts/make-stress-media.sh
 ```bash
 cd src-tauri && cargo test --lib stress -- --ignored --nocapture --test-threads=1
 ```
+
+Other checks: `powershell -File scripts/perf-check.ps1` (start-up and idle CPU budgets),
+`node scripts/sbom.mjs` (CycloneDX SBOM), `bash scripts/hw-decode-check.sh` (GPU decoding).
+UI preview without the native shell: `npm run dev`, then open `http://localhost:1420/?mock` (fake data).
 
 Put your own real-world files (Dolby Atmos, Dolby Vision, Eclipsa/IAMF exports, …) in
 `test-media/corpus/` and the stress suite plays them too. See [TESTING.md](TESTING.md).

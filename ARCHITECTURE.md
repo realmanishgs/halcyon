@@ -23,8 +23,10 @@ Rationale and alternatives: [ENGINE_DECISIONS.md](ENGINE_DECISIONS.md).
 │ libloading (no import lib, no headers)  │   │ (crash-isolated parsing)           │
 │ planned: ffmpeg/libiamf "lab" pipeline  │   └────────────────────────────────────┘
 └─────────────────────────────────────────┘
-E. Storage (planned, Phase 2b): SQLite via rusqlite — library, playlists, resume, settings.
-F. Extensions (planned): versioned Rust traits + capability-scoped Tauri permissions.
+E. Storage: db.rs — SQLite (rusqlite, bundled) in the app data dir: settings, library, playlists, history.
+F. Out-of-process tools: library.rs (index via ffprobe, covers via ffmpeg), lab.rs (decode → BS.1770
+   analyser), convert.rs (ffmpeg jobs). Browsing/discovery use a second, headless libVLC instance.
+G. Extensions (planned): versioned Rust traits + capability-scoped Tauri permissions.
 ```
 
 ## Layer responsibilities
@@ -36,6 +38,11 @@ F. Extensions (planned): versioned Rust traits + capability-scoped Tauri permiss
 | Engine abstraction | `src-tauri/src/engine/mod.rs` | `MediaEngine` trait + data types | — |
 | Adapters | `engine/vlc.rs` | FFI, resource lifetime, error mapping | Leak raw pointers upward |
 | Inspection | `probe.rs` | Container/stream facts | Run in-process on untrusted input |
+| Storage | `db.rs` | Schema, queries, smart-rule → SQL translation (whitelisted) | Interpolate user values into SQL |
+| Library | `library.rs` | Folder walk, tag extraction, covers, lyrics, playlist export | Block the UI thread |
+| Audio Lab | `lab.rs` | Streaming loudness/peak/clip/silence analysis, reports | Hold whole files in memory |
+| Conversion | `convert.rs` | FFmpeg presets, progress, cancel, cleanup | Overwrite the input |
+| Pages | `src/Library.tsx`, `Lab.tsx`, `Convert.tsx`, `Settings.tsx`, `Panels.tsx` | Views over the commands above | — |
 
 ## Key mechanics
 
@@ -77,10 +84,26 @@ duration because libVLC reports 0 before the input starts and after it ends.
 `seek_ms` restarts the input (waiting ≤ 1.5 s for Playing) before seeking. Both are covered by
 `play_and_seek_after_end`.
 
-**State flow.** The engine is the single source of truth. The UI polls `status` at 4 Hz (and immediately
-after every user action) and refreshes tracks/meta after open; decoder statistics are polled at 1 Hz only
-while the Info panel is open. Queue, repeat/shuffle, resume positions and recent files live in the UI
-(`localStorage`, wrapped so a blocked store never breaks playback).
+**State flow.** The engine is the single source of truth. libVLC's event manager pushes state changes
+(opening, playing, paused, stopped, ended, error, length, tracks, video output) as an `engine` event; the
+callback runs on a libVLC thread and only forwards the event, never calling back into libVLC. The UI then
+polls `status` once, and keeps a 4 Hz poll only while playing (1 Hz otherwise) for the playhead. Settings
+live in SQLite behind a synchronous in-memory cache in the UI (`store`), written back debounced.
+
+**Engine options that libVLC 3 reads only at start-up** (visualisers, rotation/flip, normalisation,
+ReplayGain, subtitle style) are applied by creating a new instance and player, re-attaching events,
+re-applying volume, equalizer and picture adjustment, and reopening the media at the same position.
+**Hardware decoding is a media option**, not an instance option: measured, the libVLC 3 player object
+shadows the instance-level `avcodec-hw` value, so `--avcodec-hw=none` passed to `libvlc_new` is ignored
+while `:avcodec-hw=none` on the media is honoured. Rotation forces software decoding because the
+`transform` filter cannot take Direct3D11 frames, and switches the video output to OpenGL (`glwin32`):
+measured with the real outputs, Direct3D11 stalls after the first frame with any transform (Direct3D9 and
+GDI with some), while OpenGL displays all five transforms.
+
+**Loudness analysis** streams 48 kHz float PCM from an `ffmpeg` child process through K-weighting
+biquads into 100 ms sub-blocks; momentary (4 blocks), short-term (30 blocks), gated integrated loudness
+and LRA (EBU Tech 3342) are computed from those; true peak uses a 4-phase, 96-tap Kaiser-windowed sinc
+interpolator. Memory is constant in file length.
 
 **Threading.** Sync Tauri commands run on the main thread and are O(µs) libVLC getters/setters.
 `open_media` and `expand_sources` are async; ffprobe and folder scans run on blocking workers.

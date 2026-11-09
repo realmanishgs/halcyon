@@ -15,6 +15,13 @@ fn media(name: &str) -> String {
     p.canonicalize().unwrap().to_string_lossy().into_owned() // verbatim \\?\ path: exercises plain_path()
 }
 
+/// Tests that rebuild libVLC's filter chains are timing-sensitive under parallel
+/// load (software decode + filters starve on a busy machine); run them one at a time.
+static HEAVY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn heavy() -> std::sync::MutexGuard<'static, ()> {
+    HEAVY.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 fn headless() -> VlcEngine {
     VlcEngine::load_with_args(&["--aout=adummy", "--vout=vdummy"]).expect("libVLC loads")
 }
@@ -210,6 +217,7 @@ fn events_reach_the_sink() {
 
 #[test]
 fn reconfigure_keeps_position_and_accepts_every_option() {
+    let _serial = heavy();
     let mut e = headless();
     e.open(&media("h264_aac.mp4"), None).unwrap();
     wait_for(&e, |s| s.state == PlaybackState::Playing, 10);
@@ -234,9 +242,7 @@ fn reconfigure_keeps_position_and_accepts_every_option() {
     assert_eq!(s.state, PlaybackState::Playing);
     assert!(s.time_ms >= 6_000 && s.time_ms < 9_000, "resumed at {}", s.time_ms);
     // (Volume restore is checked in the app: the dummy audio output has no volume control.)
-    let st = e.stats().unwrap();
-    sleep(Duration::from_millis(500));
-    assert!(e.stats().unwrap().decoded_video > st.decoded_video, "decoding continues with filters");
+    // (Frames through the filters are checked with a real output in rotation_decodes_in_software_and_displays.)
     // Every visualiser and transform is accepted by libVLC.
     for v in ["scope", "vuMeter", "spectrometer", "goom"] {
         e.configure(&EngineConfig { visualizer: Some(v.into()), ..Default::default() }).unwrap_or_else(|err| panic!("{v}: {err}"));
@@ -245,16 +251,13 @@ fn reconfigure_keeps_position_and_accepts_every_option() {
         let cfg = EngineConfig { transform: t.into(), ..Default::default() };
         assert!(cfg.media_options().contains(&":avcodec-hw=none".to_string()), "rotation forces software decoding");
         e.configure(&cfg).unwrap_or_else(|err| panic!("{t}: {err}"));
-        let st = wait_for(&e, |s| s.state == PlaybackState::Playing, 10);
-        let before = e.stats().map(|s| s.decoded_video).unwrap_or(0);
-        sleep(Duration::from_millis(1000));
-        let after = e.stats().map(|s| s.decoded_video).unwrap_or(0);
-        assert!(after > before, "{t}: decoding continues ({before} -> {after}, {st:?})");
+        // Display with each transform is covered by rotation_decodes_in_software_and_displays.
     }
 }
 
 #[test]
 fn equalizer_adjust_crop_and_devices() {
+    let _serial = heavy();
     let mut e = headless();
     let info = e.equalizer_info();
     assert_eq!(info.frequencies.len(), 10);
@@ -269,9 +272,10 @@ fn equalizer_adjust_crop_and_devices() {
     e.set_crop(Some("16:9"));
     e.set_crop(None);
     e.set_video_adjust(None);
+    // Filter changes rebuild the video chain; give it time under parallel test load.
     let before = e.stats().unwrap().decoded_video;
-    sleep(Duration::from_millis(500));
-    assert!(e.stats().unwrap().decoded_video > before);
+    sleep(Duration::from_millis(1500));
+    assert!(e.stats().unwrap().decoded_video > before, "decoding continues after picture changes");
     // adummy exposes no devices; the real output is checked in the app.
     let _ = e.audio_devices();
 }
@@ -346,18 +350,38 @@ fn streams_over_http_with_seeking() {
 }
 
 #[test]
-fn rotation_decodes_in_software() {
+fn rotation_decodes_in_software_and_displays() {
+    // Uses the engine's real video output choice (a small window appears briefly),
+    // because the dummy output hides the stall this guards against.
+    let _serial = heavy();
     let log = std::env::temp_dir().join(format!("halcyon-hw-{}.log", std::process::id()));
     let logarg = format!("--logfile={}", log.display());
-    let mut e = VlcEngine::load_with_args(&["--aout=adummy", "--vout=vdummy", "--file-logging", &logarg, "--log-verbose=2"]).unwrap();
-    e.configure(&EngineConfig { transform: "180".into(), ..Default::default() }).unwrap();
-    e.open(&media("h264_aac.mp4"), None).unwrap();
-    wait_for(&e, |s| s.state == PlaybackState::Playing, 10);
-    sleep(Duration::from_millis(1500));
-    let decoded = e.stats().unwrap().decoded_video;
+    let mut e = VlcEngine::load_with_args(&["--aout=adummy", "--file-logging", &logarg, "--log-verbose=2"]).unwrap();
+    for t in ["90", "180", "270", "hflip", "vflip"] {
+        e.configure(&EngineConfig { transform: t.into(), ..Default::default() }).unwrap();
+        e.open(&media("h264_aac.mp4"), None).unwrap();
+        wait_for(&e, |s| s.state == PlaybackState::Playing, 10);
+        sleep(Duration::from_millis(1200));
+        let st = e.stats().unwrap();
+        assert!(st.decoded_video > 10 && st.displayed_pictures > 3, "{t}: decoded {} displayed {}", st.decoded_video, st.displayed_pictures);
+    }
     drop(e);
     let text = String::from_utf8_lossy(&std::fs::read(&log).unwrap_or_default()).into_owned();
     let _ = std::fs::remove_file(&log);
-    assert!(decoded > 10, "decoded {decoded}");
     assert!(!text.contains("for hardware decoding"), "hardware decoding was used with a rotation filter");
+}
+
+#[test]
+fn visualisers_create_a_video_output() {
+    let _serial = heavy();
+    let mut e = VlcEngine::load_with_args(&["--aout=adummy"]).unwrap();
+    for v in ["spectrum", "scope", "vuMeter", "spectrometer", "goom"] {
+        e.configure(&EngineConfig { visualizer: Some(v.into()), ..Default::default() }).unwrap();
+        e.open(&media("tagged.flac"), None).unwrap();
+        wait_for(&e, |s| s.state == PlaybackState::Playing, 10);
+        sleep(Duration::from_millis(1500));
+        // libVLC's picture counters do not include visualiser frames, so this proves the
+        // video output exists for audio-only media; what it draws is checked by eye.
+        assert!(e.status().has_video, "{v}: no video output for the visualiser");
+    }
 }

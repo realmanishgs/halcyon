@@ -87,9 +87,35 @@ bar (new SeekBar with pointer capture + pending-seek hold); play/seek doing noth
 double-firing on a focused button; `&` rendered as a mnemonic in the native menu; fullscreen video
 covering the control bar (a window region can't clip libVLC's D3D11 swapchain).
 
+## 5. Phases 2–7 (recorded 2026-11-09)
+
+`cd src-tauri && cargo test --release --lib -- --test-threads=4` → **52 passed, 0 failed** (stress suite ignored); stable over repeated runs. Two engine tests open a small
+real video window briefly (rotation and visualisers), because the dummy output hides the problems they guard against.
+New since the format work:
+
+| Area | Tests |
+|---|---|
+| Engine | `events_reach_the_sink`, `reconfigure_keeps_position_and_accepts_every_option`, `rotation_decodes_in_software_and_displays` (real video output, all five transforms; reads VLC's own log), `equalizer_adjust_crop_and_devices`, `browses_a_local_folder_as_a_location`, `streams_over_http_with_seeking` (in-process HTTP server with Range support) |
+| Storage | `db::tests` — settings, albums/artists/order, favourites + history + stats, smart playlists incl. rejection of unknown fields/operators, manual playlists, resume, root removal |
+| Library | tag extraction (container + stream tags), attached pictures, LRC parsing, M3U8/XSPF export round trip |
+| Audio Lab | EBU reference sine (−23.0 LUFS ±0.1), 5.1 dynamic material vs FFmpeg `ebur128` (I ±0.2 LU, LRA ±0.6 LU, TP ±0.3 dB), inter-sample peaks, clipping + silence detection |
+| Conversion | every preset on real media (duration and stream types checked), argument building, cancel removes partial output |
+| Robustness | `src/fuzz.rs`: playlists (text and on disk), LRC, ffprobe JSON + tag extraction, smart-rule SQL — fixed seeds, ~100 k inputs. **Found:** a panic decoding `%` followed by a multi-byte character in playlist URLs (fixed, regression test added) |
+
+Bugs found in this round and fixed: libVLC 3 ignores `--avcodec-hw` passed to the instance (now a media
+option, verified from the log); rotation cannot use GPU frames (now forces software decoding) and froze the picture on the Direct3D11
+output after one frame (now uses the OpenGL output while rotated); volume was not
+restored after an engine restart; percent-decoding crash (above); tertiary text failed WCAG AA contrast.
+
+Other checks: `scripts/perf-check.ps1` — cold start 869 / 588 / 548 ms, idle CPU 0.02 % of 16 cores, 428 MB
+working set (app + WebView2), 1.27 % CPU playing 1080p H.264 (measured with the session locked, so WebView2
+may have been throttled). Accessibility: DOM audit of 10 pages in both themes in the browser preview
+(`?mock`): every control named, form fields labelled, heading order, focus ring, WCAG AA text contrast.
+
 ## Not yet covered
 
-Automated UI tests (WebDriver via tauri-driver needs a matching msedgedriver download), an OLE drag
-from Explorer onto the web area (input injection could not start an OLE drag in this environment —
-manual check pending), network streams (no external hosts contacted), real Dolby Atmos / Dolby Vision /
-Eclipsa exports (cannot be synthesised — add to `corpus/`), 24-hour soak, packaging.
+Visual check of the new pages, subtitle styling, mini player and visualisers in the real window (the PC was
+locked during this round, so screenshots were impossible; the UI was reviewed through the DOM with a mock
+backend). Real SMB/UPnP servers, automated UI tests (WebDriver via tauri-driver), OLE drag from Explorer onto
+the web area, real Dolby Atmos / Dolby Vision / Eclipsa exports (add to `corpus/`), 24-hour soak, IAMF mix
+rendering (needs libiamf), code signing.

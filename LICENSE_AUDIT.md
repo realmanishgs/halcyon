@@ -10,6 +10,7 @@ VLC and FFmpeg. This is an engineering audit, not legal advice; a legal review i
 | Tauri, tauri-build, tauri-plugin-dialog | 2.12 / 2.x | MIT OR Apache-2.0 | Linked | Notices |
 | serde, serde_json | 1.x | MIT OR Apache-2.0 | Linked | Notices |
 | libloading | 0.9 | ISC | Linked | Notice |
+| rusqlite (+ bundled SQLite) | 0.37 / 3.x | MIT / SQLite is public domain | Linked | Notice |
 | windows-sys | 0.61 | MIT OR Apache-2.0 | Linked | Notices |
 | React, react-dom | 19.3.1 | MIT | Bundled JS | Notice |
 | @tauri-apps/api, plugin-dialog | 2.12.4 / 2.8.4 | MIT OR Apache-2.0 | Bundled JS | Notice |
@@ -29,6 +30,18 @@ VLC and FFmpeg. This is an engineering audit, not legal advice; a legal review i
 (encoders, FAAD — AAC decoding remains available through the LGPL avcodec plugin), plus an LGPL ffprobe.
 Keep the app itself under a permissive license. Alternative: license Halcyon under GPL-3.0 and ship the full set.
 Choose before Phase 7; record the plugin manifest with per-plugin licenses in the SBOM.
+
+## Full dependency inventory
+
+`node scripts/sbom.mjs` writes a CycloneDX 1.5 SBOM of every crate and npm package (482 components on
+2026-11-09, every crate with a declared licence). Licences seen: MIT, Apache-2.0, dual MIT/Apache, Unicode-3.0,
+Zlib, BSD-3-Clause, ISC, Unlicense and **MPL-2.0** (17 crates, file-level copyleft: modified MPL files must stay
+MPL; using them unmodified is fine). The SBOM covers all target platforms, so it lists macOS/Linux-only crates too.
+
+## Conversion
+
+The converter runs the user's own `ffmpeg` executable; nothing from FFmpeg is linked or shipped. Encoder
+availability (x264/x265 are GPL) is the user's FFmpeg build's matter.
 
 ## Patents / codec licensing (to review per distribution region)
 

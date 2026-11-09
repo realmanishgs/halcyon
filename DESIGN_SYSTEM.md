@@ -12,7 +12,7 @@ Source of truth: CSS custom properties at the top of [`src/styles.css`](src/styl
 | `--surface` | `#ffffff` | `#151517` | Sidebar, transport, panels |
 | `--surface-2` | `#eeeeeb` | `#1d1d20` | Hover, selected, placeholders |
 | `--border` | `#dcdcd8` | `#2a2a2e` | 1px dividers only where structure needs it |
-| `--text` / `--text-2` / `--text-3` | `#111` / `#55554f` / `#8a8a84` | `#ededea` / `#a3a39e` / `#6d6d69` | Primary / secondary / tertiary-disabled |
+| `--text` / `--text-2` / `--text-3` | `#111` / `#55554f` / `#6b6b65` | `#ededea` / `#a3a39e` / `#85857f` | Primary / secondary / tertiary (all ≥ 4.5:1 on every surface, WCAG AA) |
 | `--accent` | `#2f5bd3` | `#7d9bff` | Progress fill, active toggles, stream tags, primary action |
 | `--danger` | `#b42318` | `#ff6b5e` | Errors only |
 | `--video-bg` | `#000` | `#000` | Video letterbox |

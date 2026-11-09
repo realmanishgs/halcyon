@@ -1,6 +1,8 @@
 mod convert;
 mod db;
 mod engine;
+#[cfg(test)]
+mod fuzz;
 mod lab;
 mod library;
 mod probe;
@@ -181,8 +183,16 @@ fn next_job(s: &AppState) -> u64 {
     s.job_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
 }
 
+static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// The UI's first call: with HALCYON_PERF set, prints the cold-start time (process start → UI script running).
 #[tauri::command]
 fn get_settings(s: State<AppState>) -> Res<serde_json::Map<String, serde_json::Value>> {
+    if std::env::var_os("HALCYON_PERF").is_some() {
+        if let Some(t) = STARTED.get() {
+            println!("perf: ui_ready_ms={}", t.elapsed().as_millis());
+        }
+    }
     db(&s)?.settings()
 }
 #[tauri::command]
@@ -486,6 +496,7 @@ fn probe_file(path: String) -> Res<probe::ProbeResult> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    STARTED.get_or_init(std::time::Instant::now);
     let (engine, engine_error) = match engine::vlc::VlcEngine::load() {
         Ok(e) => (Some(Box::new(e) as Box<dyn MediaEngine>), None),
         Err(e) => (None, Some(e)),
