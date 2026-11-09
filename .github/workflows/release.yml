@@ -58,7 +58,7 @@ jobs:
       # converter tests run where the runner has FFmpeg and skip otherwise.
       - name: Tests (storage, parsers, fuzzing, lab, converter)
         working-directory: src-tauri
-        run: cargo test --lib -- fuzz db:: sources:: library:: lab:: convert::
+        run: "cargo test --lib -- fuzz db:: sources:: library:: lab:: convert::"
 
       - uses: tauri-apps/tauri-action@v0
         id: tauri
