@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { LogicalSize } from "@tauri-apps/api/dpi";
+import { LogicalSize, PhysicalPosition } from "@tauri-apps/api/dpi";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -499,6 +499,8 @@ export default function App() {
       const sz = await w.innerSize();
       const k = await w.scaleFactor();
       store.set("normalSize", [sz.width / k, sz.height / k]);
+      const pos = await w.outerPosition();
+      store.set("normalPos", [pos.x, pos.y]);
       if (fullscreen) { await w.setFullscreen(false); setFullscreen(false); }
       await w.setMinSize(new LogicalSize(320, 60));
       await w.setAlwaysOnTop(true);
@@ -507,6 +509,9 @@ export default function App() {
       const [ww, hh] = store.get<[number, number]>("normalSize", [1200, 760]);
       await w.setAlwaysOnTop(false);
       await w.setDecorations(true);
+      // Back where the full window was, not where the mini player was dragged.
+      const np = store.get<[number, number] | null>("normalPos", null);
+      if (np) await w.setPosition(new PhysicalPosition(np[0], np[1]));
       await w.setSize(new LogicalSize(ww, hh));
       await w.setMinSize(new LogicalSize(420, 300));
     }
