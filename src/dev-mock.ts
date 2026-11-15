@@ -19,7 +19,7 @@ const analysis = {
 };
 const day = Math.floor(Date.now() / 86400000);
 const R: Record<string, unknown> = {
-  get_settings: {}, startup_files: [], expand_sources: [],
+  get_settings: {}, startup_files: [], expand_sources: [], skins_list: [],
   diagnostics: { engine: { name: "libVLC", version: "3.0.24 (mock)", location: "C:\\Program Files\\VideoLAN\\VLC" }, engine_error: null, ffprobe: "ffprobe.exe" },
   engine_config: { hw_decode: true, normalize: false, replay_gain: false, visualizer: null, transform: "", sub_scale: 100, sub_color: 0xffffff, sub_outline: 4, sub_background: 0, sub_margin: 0 },
   equalizer_info: { frequencies: [60, 170, 310, 600, 1000, 3000, 6000, 12000, 14000, 16000], presets: [["Flat", { preamp: 12, bands: Array(10).fill(0) }], ["Rock", { preamp: 5, bands: [8, 5, -5, -8, -3, 4, 8, 11, 11, 11] }]] },

@@ -494,6 +494,69 @@ fn probe_file(path: String) -> Res<probe::ProbeResult> {
     probe::probe(&path)
 }
 
+// ---------- classic skins (Winamp 2.x .wsz) ----------
+fn skins_dir(app: &tauri::AppHandle) -> Res<std::path::PathBuf> {
+    let d = app.path().app_data_dir().map_err(|e| e.to_string())?.join("skins");
+    std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+    Ok(d)
+}
+
+/// Skin names must be plain file names: no separators or parent references.
+fn skin_file(app: &tauri::AppHandle, name: &str) -> Res<std::path::PathBuf> {
+    if name.is_empty() || name.contains(['/', '\\', ':']) || name.contains("..") {
+        return Err("Invalid skin name".into());
+    }
+    Ok(skins_dir(app)?.join(format!("{name}.wsz")))
+}
+
+#[tauri::command]
+fn skins_list(app: tauri::AppHandle) -> Res<Vec<String>> {
+    let mut v: Vec<String> = std::fs::read_dir(skins_dir(&app)?)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            if !p.extension()?.to_str()?.eq_ignore_ascii_case("wsz") {
+                return None;
+            }
+            Some(p.file_stem()?.to_string_lossy().into_owned())
+        })
+        .collect();
+    v.sort_by_key(|n| n.to_lowercase());
+    Ok(v)
+}
+
+/// Copies a .wsz/.zip skin into the app's skins folder; returns its name.
+#[tauri::command]
+fn skin_install(path: String, app: tauri::AppHandle) -> Res<String> {
+    let src = std::path::Path::new(&path);
+    let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if ext != "wsz" && ext != "zip" {
+        return Err("Choose a Winamp classic skin (.wsz or .zip)".into());
+    }
+    let bytes = std::fs::read(src).map_err(|e| e.to_string())?;
+    if bytes.len() > 10 * 1024 * 1024 || !bytes.starts_with(b"PK") {
+        return Err("Not a skin file (expected a ZIP under 10 MB)".into());
+    }
+    let name: String = src.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+        .chars().map(|c| if c.is_alphanumeric() || " -_.()[]".contains(c) { c } else { '_' }).collect::<String>()
+        .trim_matches('.').to_string();
+    let target = skin_file(&app, if name.is_empty() { "skin" } else { &name })?;
+    std::fs::write(&target, bytes).map_err(|e| e.to_string())?;
+    Ok(target.file_stem().unwrap().to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn skin_remove(name: String, app: tauri::AppHandle) -> Res<()> {
+    std::fs::remove_file(skin_file(&app, &name)?).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn skin_read(name: String, app: tauri::AppHandle) -> Res<tauri::ipc::Response> {
+    let bytes = std::fs::read(skin_file(&app, &name)?).map_err(|e| e.to_string())?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     STARTED.get_or_init(std::time::Instant::now);
@@ -578,7 +641,8 @@ pub fn run() {
             library_album_tracks, library_artists, library_artist_tracks, media_row, set_favorite, cover, lyrics,
             playlists, playlist_create, playlist_update, playlist_delete, playlist_items, playlist_set_items,
             playlist_add, playlist_export, playlist_import, record_play, listening_stats, clear_history, resume_get,
-            resume_set, convert_presets, convert_start, cancel_job, lab_analyze, lab_export, lab_extract, probe_file
+            resume_set, convert_presets, convert_start, cancel_job, lab_analyze, lab_export, lab_extract, probe_file,
+            skins_list, skin_install, skin_remove, skin_read
         ])
         .run(tauri::generate_context!())
         .expect("error while running Halcyon");

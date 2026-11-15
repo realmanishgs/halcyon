@@ -19,6 +19,12 @@ import { LibraryPage, MusicPage, NetworkPage, PlaylistsPage, StatsPage, VideosPa
 import { LabPage } from "./Lab";
 import { ConvertPage } from "./Convert";
 import { SettingsPage } from "./Settings";
+import { ClassicSkin } from "./ClassicSkin";
+import { freeSkin, loadSkin, type Skin } from "./winamp";
+
+/** A chosen classic skin: one shipped with the app, or one the user installed. */
+export interface SkinChoice { kind: "builtin" | "user"; name: string }
+export const BUILTIN_SKINS = ["Silverline", "Phosphor"];
 
 type View = "player" | "library" | "music" | "videos" | "playlists" | "network" | "lab" | "convert" | "stats" | "settings";
 type PanelTab = "queue" | "info" | "tune" | "audio" | "picture";
@@ -107,6 +113,28 @@ export default function App() {
   const [sleepAt, setSleepAt] = useState<number | null>(null);
   const [sleepAtEnd, setSleepAtEnd] = useState(false);
   const [mini, setMini] = useState(false);
+  const [skinChoice, setSkinChoice] = useState<SkinChoice | null>(() => store.get("skin", null));
+  const [skinScale, setSkinScale] = useState<number>(() => store.get("skinScale", 2));
+  const [skin, setSkin] = useState<Skin | null>(null);
+  useEffect(() => store.set("skin", skinChoice), [skinChoice]);
+  useEffect(() => store.set("skinScale", skinScale), [skinScale]);
+  useEffect(() => {
+    let live = true;
+    let loaded: Skin | null = null;
+    if (!skinChoice) { setSkin(null); return; }
+    (async () => {
+      try {
+        const data = skinChoice.kind === "builtin"
+          ? await (await fetch(`/skins/${skinChoice.name.toLowerCase()}.wsz`)).arrayBuffer()
+          : await api.skinRead(skinChoice.name);
+        loaded = await loadSkin(skinChoice.name, data);
+        if (live) setSkin(loaded); else freeSkin(loaded);
+      } catch (e) {
+        if (live) { setSkin(null); setSkinChoice(null); setError(`Skin could not be loaded: ${e}`); }
+      }
+    })();
+    return () => { live = false; freeSkin(loaded); };
+  }, [skinChoice]);
   const listened = useRef({ path: "", ms: 0, last: -1, recorded: false });
   const videoRef = useRef<HTMLDivElement>(null);
   const transportRef = useRef<HTMLElement>(null);
@@ -478,6 +506,7 @@ export default function App() {
     } else {
       const [ww, hh] = store.get<[number, number]>("normalSize", [1200, 760]);
       await w.setAlwaysOnTop(false);
+      await w.setDecorations(true);
       await w.setSize(new LogicalSize(ww, hh));
       await w.setMinSize(new LogicalSize(420, 300));
     }
@@ -487,11 +516,25 @@ export default function App() {
   useEffect(() => {
     if (!mini) return;
     const raf = requestAnimationFrame(() => {
+      const w = getCurrentWindow();
+      if (skin) {
+        // Skinned mini player: the skin is the whole window (no Windows title bar), like Winamp.
+        const sw = 275 * skinScale;
+        w.setDecorations(false).catch(() => {});
+        const sh = 116 * skinScale + (hasVideo ? Math.round(sw * 9 / 16) : 0);
+        w.setSize(new LogicalSize(sw, sh)).then(() => new Promise((r) => setTimeout(r, 150))).then(() => {
+          // A borderless window keeps a thin resize frame: grow by whatever the page actually lost.
+          const dx = sw - window.innerWidth, dy = sh - window.innerHeight;
+          if (dx > 0 || dy > 0) return w.setSize(new LogicalSize(sw + Math.max(0, dx), sh + Math.max(0, dy)));
+        }).catch(() => {});
+        return;
+      }
+      w.setDecorations(true).catch(() => {});
       const bar = transportRef.current?.offsetHeight ?? 88;
-      getCurrentWindow().setSize(new LogicalSize(420, bar + (hasVideo ? Math.round(420 * 9 / 16) : 0))).catch(() => {});
+      w.setSize(new LogicalSize(420, bar + (hasVideo ? Math.round(420 * 9 / 16) : 0))).catch(() => {});
     });
     return () => cancelAnimationFrame(raf);
-  }, [mini, hasVideo]);
+  }, [mini, hasVideo, skin, skinScale]);
   const actions: PlayActions = useMemo(() => ({
     play: (items: string[], start = 0) => { if (!items.length) return; setQueue(items); loadIndex(start, items); },
     enqueue: (items: string[]) => {
@@ -739,7 +782,7 @@ export default function App() {
   const effVolume = status.muted ? 0 : Math.max(0, status.volume);
 
   return (
-    <div className={`app${fullscreen ? " fs" : ""}${fullscreen && !controlsShown ? " idle" : ""}${mini ? " mini" : ""}${mini && !hasVideo ? " mini-audio" : ""}`}
+    <div className={`app${fullscreen ? " fs" : ""}${fullscreen && !controlsShown ? " idle" : ""}${mini ? " mini" : ""}${mini && !hasVideo ? " mini-audio" : ""}${mini && skin ? " mini-skin" : ""}`}
       // WebView2 fires synthetic zero-movement pointermoves after layout changes (e.g. the
       // controls hiding); only real movement may reveal them again.
       onPointerMove={fullscreen ? (e) => { if (e.movementX || e.movementY) wake(); } : undefined}>
@@ -789,7 +832,8 @@ export default function App() {
             {view === "settings" ? (
               <SettingsPage diag={diag} cfg={cfg} onCfg={applyConfig} theme={theme} onTheme={setTheme} accent={accent} onAccent={setAccent}
                 devices={devices} device={device} onDevice={(id) => { setDevice(id); api.setAudioDevice(id).catch(() => {}); }}
-                privateMode={privateMode} onPrivate={setPrivateMode} resume={resumeOn} onResume={setResumeOn} onMini={() => toggleMini(true)} />
+                privateMode={privateMode} onPrivate={setPrivateMode} resume={resumeOn} onResume={setResumeOn} onMini={() => toggleMini(true)}
+                skin={skinChoice} onSkin={setSkinChoice} skinScale={skinScale} onSkinScale={setSkinScale} builtinSkins={BUILTIN_SKINS} say={say} />
             ) : view === "library" ? <LibraryPage actions={actions} />
             : view === "music" ? <MusicPage actions={actions} />
             : view === "videos" ? <VideosPage actions={actions} />
@@ -895,7 +939,29 @@ export default function App() {
         )}
       </div>
 
-      <footer className={`transport${fullscreen && !controlsShown ? " hidden" : ""}`} ref={transportRef}
+      {skin && mini && (() => {
+        const a = opened?.probe?.streams.find((x) => x.codec_type === "audio");
+        const br = Number(a?.bit_rate ?? opened?.probe?.format.bit_rate ?? 0);
+        return (
+          <div className="classic-dock">
+            <ClassicSkin skin={skin} scale={skinScale} status={status} lengthMs={lengthMs} title={title} index={Math.max(0, index)}
+              kbps={br ? Math.round(br / 1000) : null} khz={a?.sample_rate ? Math.round(Number(a.sample_rate) / 1000) : null}
+              channels={a?.channels ?? null} shuffle={shuffle} repeat={repeat !== "off"} eqOpen={panel === "audio"} plOpen={panel === "queue"}
+              on={{
+                prev, next, eject: pickFiles,
+                play: () => { if (playing) { engine.seek(0); poll(); } else togglePlay(); },
+                pause: () => { if (playing || status.state === "paused") act(engine.setPaused(playing)); },
+                stop: () => act(engine.stop()),
+                seek: seekTo, volume: setVolume,
+                shuffle: () => setShuffle((x) => !x),
+                repeat: () => setRepeat((r) => (r === "off" ? "all" : "off")),
+                eq: () => openPanel("audio"), pl: () => openPanel("queue"),
+                close: () => toggleMini(false), minimize: () => getCurrentWindow().minimize(),
+              }} />
+          </div>
+        );
+      })()}
+      <footer className={`transport${fullscreen && !controlsShown ? " hidden" : ""}${skin && mini ? " skinned" : ""}`} ref={transportRef}
         onPointerEnter={() => { overTransport.current = true; }} onPointerLeave={() => { overTransport.current = false; wake(); }}>
         <SeekBar status={viewStatus} receivedAt={receivedAt} onSeek={seekTo} chapters={chapters} />
         <div className="controls">

@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { api, type AudioDevice, type Diagnostics, type EngineConfig } from "./engine";
 
 export const ACCENTS = ["#7d9bff", "#2f5bd3", "#16a34a", "#d97706", "#db2777", "#7c3aed", "#0891b2"];
@@ -16,7 +17,26 @@ export function SettingsPage(p: {
   privateMode: boolean; onPrivate: (v: boolean) => void;
   resume: boolean; onResume: (v: boolean) => void;
   onMini: () => void;
+  skin: { kind: "builtin" | "user"; name: string } | null;
+  onSkin: (s: { kind: "builtin" | "user"; name: string } | null) => void;
+  skinScale: number; onSkinScale: (n: number) => void;
+  builtinSkins: string[];
+  say: (t: string) => void;
 }) {
+  const [userSkins, setUserSkins] = useState<string[]>([]);
+  const reloadSkins = useCallback(() => { api.skinsList().then((l) => setUserSkins(l ?? [])).catch(() => {}); }, []);
+  useEffect(() => { reloadSkins(); }, [reloadSkins]);
+  const addSkin = async () => {
+    const f = await openDialog({ multiple: false, filters: [{ name: "Winamp classic skin", extensions: ["wsz", "zip"] }] });
+    if (typeof f !== "string") return;
+    try {
+      const name = await api.skinInstall(f);
+      reloadSkins();
+      p.onSkin({ kind: "user", name });
+      p.say(`Skin installed: ${name}`);
+    } catch (e) { p.say(String(e)); }
+  };
+  const isOn = (kind: "builtin" | "user", name: string) => p.skin?.kind === kind && p.skin.name === name;
   const [plugins, setPlugins] = useState<[string, string[]][]>([]);
   useEffect(() => { api.plugins().then(setPlugins).catch(() => {}); }, []);
   const c = p.cfg;
@@ -45,6 +65,40 @@ export function SettingsPage(p: {
           </div>
           <label>Mini player</label>
           <div><button className="btn small" onClick={p.onMini}>Open mini player (always on top)</button></div>
+        </div>
+
+        <h2 className="section">Player skin</h2>
+        <div className="form">
+          <label>Skin</label>
+          <div className="chips">
+            <button className={`chip${p.skin === null ? " on" : ""}`} onClick={() => p.onSkin(null)}>Modern (default)</button>
+            {p.builtinSkins.map((n) => (
+              <button key={n} className={`chip${isOn("builtin", n) ? " on" : ""}`} onClick={() => p.onSkin({ kind: "builtin", name: n })}>{n}</button>
+            ))}
+            {userSkins.map((n) => (
+              <span key={n} className="skin-chip">
+                <button className={`chip${isOn("user", n) ? " on" : ""}`} onClick={() => p.onSkin({ kind: "user", name: n })} title={`${n}.wsz`}>{n}</button>
+                <button className="icon-btn sm" aria-label={`Remove skin ${n}`} title="Remove" onClick={async () => {
+                  await api.skinRemove(n).catch(() => {});
+                  if (isOn("user", n)) p.onSkin(null);
+                  reloadSkins();
+                }}>×</button>
+              </span>
+            ))}
+          </div>
+          <label>Winamp skins</label>
+          <div className="col">
+            <div><button className="btn small" onClick={addSkin}>Add a Winamp 2.x skin (.wsz)…</button></div>
+            <span className="small muted">Any classic Winamp 2.x skin works, drawn exactly as made, including the original base skin.
+              The Internet Archive's Winamp Skin Museum (skins.webamp.org) has tens of thousands. The skin is used for the mini player
+              (the full window keeps the modern look); drag it by its title bar, × returns to the full window.</span>
+          </div>
+          <label>Skin size</label>
+          <div className="chips">
+            {[1, 2, 3].map((n) => (
+              <button key={n} className={`chip${p.skinScale === n ? " on" : ""}`} onClick={() => p.onSkinScale(n)}>{n}×</button>
+            ))}
+          </div>
         </div>
 
         <h2 className="section">Playback</h2>

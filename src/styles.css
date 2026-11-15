@@ -357,3 +357,16 @@ input[type="color"] { width: 32px; height: 26px; border: 1px solid var(--border)
 .app.mini .time { min-width: 34px; }
 .lyrics { scrollbar-width: none; }
 .lyrics::-webkit-scrollbar { display: none; }
+
+/* Classic (Winamp 2.x) skins: the skin's own bitmaps, pixel-exact at 1-3x. */
+.classic-dock { flex: none; display: flex; justify-content: center; padding: 10px; background: var(--surface); border-top: 1px solid var(--border); }
+.classic-skin { position: relative; flex: none; }
+.classic-inner { position: absolute; left: 0; top: 0; width: 275px; height: 116px; transform-origin: 0 0; image-rendering: pixelated; user-select: none; }
+.classic-inner div { image-rendering: pixelated; }
+.classic-hit { position: absolute; cursor: pointer; }
+.transport.skinned { display: none; }
+.skin-chip { display: inline-flex; align-items: center; }
+
+/* Skinned mini player: the skin fills the window. */
+.app.mini-skin .classic-dock { padding: 0; border: 0; background: #000; }
+.app.mini-skin.mini-audio .body { display: none; }

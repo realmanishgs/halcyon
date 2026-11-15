@@ -238,6 +238,10 @@ export const api = {
   exportAnalysis: (analysis: Analysis, target: string) => invoke<void>("lab_export", { analysis, target }),
   extractStream: (path: string, stream: number) => invoke<string>("lab_extract", { path, stream }),
   probe: (path: string) => invoke<ProbeResult>("probe_file", { path }),
+  skinsList: () => invoke<string[]>("skins_list"),
+  skinInstall: (path: string) => invoke<string>("skin_install", { path }),
+  skinRemove: (name: string) => invoke<void>("skin_remove", { name }),
+  skinRead: (name: string) => invoke<ArrayBuffer>("skin_read", { name }),
 };
 
 export const DEFAULT_CONFIG: EngineConfig = {
