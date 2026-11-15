@@ -241,7 +241,13 @@ export const api = {
   skinsList: () => invoke<string[]>("skins_list"),
   skinInstall: (path: string) => invoke<string>("skin_install", { path }),
   skinRemove: (name: string) => invoke<void>("skin_remove", { name }),
-  skinRead: (name: string) => invoke<ArrayBuffer>("skin_read", { name }),
+  /** Raw skin file bytes. The IPC layer may deliver them as ArrayBuffer, a typed array or a plain number array. */
+  skinRead: async (name: string): Promise<ArrayBuffer> => {
+    const r = await invoke<ArrayBuffer | Uint8Array | number[]>("skin_read", { name });
+    if (r instanceof ArrayBuffer) return r;
+    const u = r instanceof Uint8Array ? r : Uint8Array.from(r);
+    return u.buffer.slice(u.byteOffset, u.byteOffset + u.byteLength) as ArrayBuffer;
+  },
 };
 
 export const DEFAULT_CONFIG: EngineConfig = {

@@ -27,7 +27,7 @@ export function SettingsPage(p: {
   const reloadSkins = useCallback(() => { api.skinsList().then((l) => setUserSkins(l ?? [])).catch(() => {}); }, []);
   useEffect(() => { reloadSkins(); }, [reloadSkins]);
   const addSkin = async () => {
-    const f = await openDialog({ multiple: false, filters: [{ name: "Winamp classic skin", extensions: ["wsz", "zip"] }] });
+    const f = await openDialog({ multiple: false, filters: [{ name: "Player skins (Winamp 2.x, XMMS, CoolPlayer, K-Jofol)", extensions: ["wsz", "zip", "kjofol"] }] });
     if (typeof f !== "string") return;
     try {
       const name = await api.skinInstall(f);
@@ -88,8 +88,8 @@ export function SettingsPage(p: {
           </div>
           <label>Winamp skins</label>
           <div className="col">
-            <div><button className="btn small" onClick={addSkin}>Add a Winamp 2.x skin (.wsz)…</button></div>
-            <span className="small muted">Any classic Winamp 2.x skin works, drawn exactly as made, including the original base skin.
+            <div><button className="btn small" onClick={addSkin}>Add a skin (.wsz, .zip, .kjofol)…</button></div>
+            <span className="small muted">Supported: Winamp 2.x and XMMS skins, CoolPlayer and K-Jofol skins, drawn exactly as made.
               The Internet Archive's Winamp Skin Museum (skins.webamp.org) has tens of thousands. The skin is used for the mini player
               (the full window keeps the modern look); drag it by its title bar, × returns to the full window.</span>
           </div>

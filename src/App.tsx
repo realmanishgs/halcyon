@@ -20,7 +20,25 @@ import { LabPage } from "./Lab";
 import { ConvertPage } from "./Convert";
 import { SettingsPage } from "./Settings";
 import { ClassicSkin } from "./ClassicSkin";
-import { freeSkin, loadSkin, type Skin } from "./winamp";
+import { freeSkin, loadSkin, unzip, type Skin } from "./winamp";
+import { loadBitmapSkin, type BitmapSkin } from "./bitmapskin";
+import { BitmapSkinView } from "./BitmapSkinView";
+
+type AnySkin = Skin | BitmapSkin;
+const isBitmap = (s: AnySkin): s is BitmapSkin => (s as BitmapSkin).kind === "bitmap";
+const skinSize = (s: AnySkin): [number, number] => (isBitmap(s) ? [s.width, s.height] : [275, 116]);
+
+/** Winamp 2.x / XMMS first, then the other bitmap formats (CoolPlayer, K-Jofol). */
+async function loadAnySkin(name: string, data: ArrayBuffer): Promise<AnySkin> {
+  // Formats with their own layout file first: K-Jofol skins also ship a main.bmp.
+  const b = await loadBitmapSkin(name, await unzip(data));
+  if (b) return b;
+  try {
+    return await loadSkin(name, data);
+  } catch (e) {
+    throw new Error(`Not a supported skin (Winamp 2.x / XMMS, CoolPlayer or K-Jofol): ${e}`);
+  }
+}
 
 /** A chosen classic skin: one shipped with the app, or one the user installed. */
 export interface SkinChoice { kind: "builtin" | "user"; name: string }
@@ -115,19 +133,19 @@ export default function App() {
   const [mini, setMini] = useState(false);
   const [skinChoice, setSkinChoice] = useState<SkinChoice | null>(() => store.get("skin", null));
   const [skinScale, setSkinScale] = useState<number>(() => store.get("skinScale", 2));
-  const [skin, setSkin] = useState<Skin | null>(null);
+  const [skin, setSkin] = useState<AnySkin | null>(null);
   useEffect(() => store.set("skin", skinChoice), [skinChoice]);
   useEffect(() => store.set("skinScale", skinScale), [skinScale]);
   useEffect(() => {
     let live = true;
-    let loaded: Skin | null = null;
+    let loaded: AnySkin | null = null;
     if (!skinChoice) { setSkin(null); return; }
     (async () => {
       try {
         const data = skinChoice.kind === "builtin"
           ? await (await fetch(`/skins/${skinChoice.name.toLowerCase()}.wsz`)).arrayBuffer()
           : await api.skinRead(skinChoice.name);
-        loaded = await loadSkin(skinChoice.name, data);
+        loaded = await loadAnySkin(skinChoice.name, data);
         if (live) setSkin(loaded); else freeSkin(loaded);
       } catch (e) {
         if (live) { setSkin(null); setSkinChoice(null); setError(`Skin could not be loaded: ${e}`); }
@@ -541,14 +559,16 @@ export default function App() {
       const w = getCurrentWindow();
       if (skin) {
         // Skinned mini player: the skin is the whole window (no Windows title bar), like Winamp.
-        const sw = 275 * skinScale;
-        w.setDecorations(false).catch(() => {});
-        const sh = 116 * skinScale + (hasVideo ? Math.round(sw * 9 / 16) : 0);
+        const [bw, bh] = skinSize(skin);
+        const sw = bw * skinScale;
+        // Removing the title bar drops keyboard focus; give it back so Esc and shortcuts work.
+        w.setDecorations(false).then(() => w.setFocus()).then(() => getCurrentWebview().setFocus()).catch(() => {});
+        const sh = bh * skinScale + (hasVideo ? Math.round(sw * 9 / 16) : 0);
         w.setSize(new LogicalSize(sw, sh)).then(() => new Promise((r) => setTimeout(r, 150))).then(() => {
           // A borderless window keeps a thin resize frame: grow by whatever the page actually lost.
           const dx = sw - window.innerWidth, dy = sh - window.innerHeight;
           if (dx > 0 || dy > 0) return w.setSize(new LogicalSize(sw + Math.max(0, dx), sh + Math.max(0, dy)));
-        }).catch(() => {});
+        }).then(() => w.setFocus()).then(() => getCurrentWebview().setFocus()).catch(() => {});
         return;
       }
       w.setDecorations(true).catch(() => {});
@@ -965,8 +985,9 @@ export default function App() {
         const a = opened?.probe?.streams.find((x) => x.codec_type === "audio");
         const br = Number(a?.bit_rate ?? opened?.probe?.format.bit_rate ?? 0);
         return (
-          <div className="classic-dock">
-            <ClassicSkin skin={skin} scale={skinScale} status={status} lengthMs={lengthMs} title={title} index={Math.max(0, index)}
+          <div className="classic-dock" onPointerDown={() => { getCurrentWebview().setFocus().catch(() => {}); }}>
+{isBitmap(skin) ? (
+                        <BitmapSkinView skin={skin} scale={skinScale} status={status} lengthMs={lengthMs} title={title} index={Math.max(0, index)}
               kbps={br ? Math.round(br / 1000) : null} khz={a?.sample_rate ? Math.round(Number(a.sample_rate) / 1000) : null}
               channels={a?.channels ?? null} shuffle={shuffle} repeat={repeat !== "off"} eqOpen={panel === "audio"} plOpen={panel === "queue"}
               on={{
@@ -980,6 +1001,22 @@ export default function App() {
                 eq: () => openPanel("audio"), pl: () => openPanel("queue"),
                 close: () => toggleMini(false), minimize: () => getCurrentWindow().minimize(),
               }} />
+            ) : (
+                        <ClassicSkin skin={skin} scale={skinScale} status={status} lengthMs={lengthMs} title={title} index={Math.max(0, index)}
+              kbps={br ? Math.round(br / 1000) : null} khz={a?.sample_rate ? Math.round(Number(a.sample_rate) / 1000) : null}
+              channels={a?.channels ?? null} shuffle={shuffle} repeat={repeat !== "off"} eqOpen={panel === "audio"} plOpen={panel === "queue"}
+              on={{
+                prev, next, eject: pickFiles,
+                play: () => { if (playing) { engine.seek(0); poll(); } else togglePlay(); },
+                pause: () => { if (playing || status.state === "paused") act(engine.setPaused(playing)); },
+                stop: () => act(engine.stop()),
+                seek: seekTo, volume: setVolume,
+                shuffle: () => setShuffle((x) => !x),
+                repeat: () => setRepeat((r) => (r === "off" ? "all" : "off")),
+                eq: () => openPanel("audio"), pl: () => openPanel("queue"),
+                close: () => toggleMini(false), minimize: () => getCurrentWindow().minimize(),
+              }} />
+            )}
           </div>
         );
       })()}

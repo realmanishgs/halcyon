@@ -537,8 +537,8 @@ fn skins_list(app: tauri::AppHandle) -> Res<Vec<String>> {
 fn skin_install(path: String, app: tauri::AppHandle) -> Res<String> {
     let src = std::path::Path::new(&path);
     let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    if ext != "wsz" && ext != "zip" {
-        return Err("Choose a Winamp classic skin (.wsz or .zip)".into());
+    if !["wsz", "zip", "kjofol"].contains(&ext.as_str()) {
+        return Err("Choose a skin file (.wsz, .zip or .kjofol)".into());
     }
     let bytes = std::fs::read(src).map_err(|e| e.to_string())?;
     if bytes.len() > 10 * 1024 * 1024 || !bytes.starts_with(b"PK") {

@@ -123,7 +123,9 @@ export const DEFAULT_VISCOLORS = [
 /** Loads a .wsz into a Skin. Missing sheets are tolerated (those parts are drawn empty). */
 export async function loadSkin(name: string, data: ArrayBuffer): Promise<Skin> {
   const files = await unzip(data);
-  if (!files.has("main.bmp")) throw new Error("This is not a Winamp 2.x classic skin (no main.bmp)");
+  if (!files.has("main.bmp") || !(files.has("cbuttons.bmp") || files.has("titlebar.bmp"))) {
+    throw new Error("This is not a Winamp 2.x classic skin (needs main.bmp and cbuttons.bmp)");
+  }
   const sheets: Record<string, string> = {};
   const urls: string[] = [];
   for (const s of SHEETS) {
@@ -139,6 +141,6 @@ export async function loadSkin(name: string, data: ArrayBuffer): Promise<Skin> {
   return { name, sheets, urls, viscolors: vis ? parseViscolor(new TextDecoder("latin1").decode(vis)) : DEFAULT_VISCOLORS };
 }
 
-export function freeSkin(s: Skin | null) {
+export function freeSkin(s: { urls: string[] } | null) {
   s?.urls.forEach((u) => URL.revokeObjectURL(u));
 }
