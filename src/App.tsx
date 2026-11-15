@@ -141,6 +141,7 @@ export default function App() {
   const prevState = useRef<PlaybackStatus["state"]>("idle");
   const pendingResume = useRef<number | null>(null);
   const silentResume = useRef(false);
+  const failures = useRef(0);
   const hideTimer = useRef<number | undefined>(undefined);
   const overTransport = useRef(false);
 
@@ -189,6 +190,11 @@ export default function App() {
     if (device) api.setAudioDevice(device).catch(() => {});
     const v = store.get<number | null>("volume", null);
     if (v !== null) engine.setVolume(v).catch(() => {});
+    // Keep the library in step with the disk: files moved or deleted since the last scan
+    // are dropped and new ones indexed. Incremental (only new/changed files are probed).
+    setTimeout(() => {
+      api.roots().then((r) => { if (r.length) api.scan().catch(() => {}); }).catch(() => {});
+    }, 3000);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   // Equalizer (plus any Lab level-matching gain) follows the stored state.
   useEffect(() => {
@@ -252,7 +258,7 @@ export default function App() {
   }, [status.time_ms]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------- loading ----------
-  const loadIndex = useCallback(async (i: number, list: string[], startAt?: number) => {
+  const loadIndex = useCallback(async (i: number, list: string[], startAt?: number, missed = 0): Promise<void> => {
     const src = list[i];
     if (!src) return;
     flushPlay();
@@ -284,10 +290,19 @@ export default function App() {
       setTimeout(refreshDetails, 500);
       setTimeout(refreshDetails, 1800);
       poll();
+      failures.current = 0;
     } catch (e) {
-      setError(`${basename(src)}: ${e}`);
+      // Missing file (moved/deleted since the library scan): skip straight to the next one,
+      // but give up after 25 in a row and say why, instead of rattling through the queue.
+      if (String(e).includes("File not found") && i + 1 < list.length && missed < 25) {
+        return loadIndex(i + 1, list, undefined, missed + 1);
+      }
+      setError(missed > 0
+        ? `${missed + 1} files in a row were not found (moved or deleted?). Rescan the library in Library → Rescan.`
+        : `${basename(src)}: ${e}`);
+      if (missed > 0) say(`Skipped ${missed} missing file${missed > 1 ? "s" : ""}`);
     }
-  }, [refreshDetails, poll, flushPlay, resumeOn, privateMode]);
+  }, [refreshDetails, poll, flushPlay, resumeOn, privateMode, say]);
 
   const playSources = useCallback(async (items: string[], append = false) => {
     const expanded = await engine.expand(items);
@@ -379,8 +394,10 @@ export default function App() {
     }
     if (status.state === "error" && was !== "error") {
       setError(`The engine could not play ${current ? basename(current) : "this media"}.`);
+      // Move on, but never loop through a whole queue of unplayable items.
+      failures.current += 1;
       const j = nextIndex(1);
-      if (j !== null && queue.length > 1) setTimeout(() => loadIndex(j, queue), 1200);
+      if (j !== null && queue.length > 1 && failures.current < 5) setTimeout(() => loadIndex(j, queue), 1200);
     }
   }, [status.state]); // eslint-disable-line react-hooks/exhaustive-deps
 

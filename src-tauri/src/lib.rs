@@ -79,9 +79,15 @@ fn is_subtitle_file(path: String) -> bool {
     sources::is_subtitle(&path)
 }
 
+const MISSING: &str = "File not found (moved or deleted?)";
+
 #[tauri::command]
 async fn open_media(path: String, s: State<'_, AppState>) -> Res<OpenResult> {
     let local = !engine::is_url(&path);
+    // A library or playlist can point at files that were moved or deleted since.
+    if local && !std::path::Path::new(&engine::plain_path(&path)).is_file() {
+        return Err(MISSING.into());
+    }
     let p = path.clone();
     let probed = if local {
         Some(tauri::async_runtime::spawn_blocking(move || probe::probe(&p)).await.map_err(|e| e.to_string())?)
