@@ -377,5 +377,7 @@ input[type="color"] { width: 32px; height: 26px; border: 1px solid var(--border)
 .skin-chip { display: inline-flex; align-items: center; }
 
 /* Skinned mini player: the skin fills the window. */
-.app.mini-skin .classic-dock { padding: 0; border: 0; background: #000; }
+.app.mini-skin .classic-dock { padding: 0; border: 0; background: transparent; }
+/* Skinned mini player: the window is see-through, so only the skin's own pixels show. */
+html:has(.app.mini-skin), body:has(.app.mini-skin), .app.mini-skin, .app.mini-skin .body, .app.mini-skin .stage { background: transparent; }
 .app.mini-skin.mini-audio .body { display: none; }

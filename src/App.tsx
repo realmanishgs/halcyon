@@ -544,6 +544,7 @@ export default function App() {
       const [ww, hh] = store.get<[number, number]>("normalSize", [1200, 760]);
       await w.setAlwaysOnTop(false);
       await w.setDecorations(true);
+      await w.setShadow(true);
       // Back where the full window was, not where the mini player was dragged.
       const np = store.get<[number, number] | null>("normalPos", null);
       if (np) await w.setPosition(new PhysicalPosition(np[0], np[1]));
@@ -562,7 +563,7 @@ export default function App() {
         const [bw, bh] = skinSize(skin);
         const sw = bw * skinScale;
         // Removing the title bar drops keyboard focus; give it back so Esc and shortcuts work.
-        w.setDecorations(false).then(() => w.setFocus()).then(() => getCurrentWebview().setFocus()).catch(() => {});
+        w.setDecorations(false).then(() => w.setShadow(false)).then(() => w.setFocus()).then(() => getCurrentWebview().setFocus()).catch(() => {});
         const sh = bh * skinScale + (hasVideo ? Math.round(sw * 9 / 16) : 0);
         w.setSize(new LogicalSize(sw, sh)).then(() => new Promise((r) => setTimeout(r, 150))).then(() => {
           // A borderless window keeps a thin resize frame: grow by whatever the page actually lost.
@@ -571,7 +572,7 @@ export default function App() {
         }).then(() => w.setFocus()).then(() => getCurrentWebview().setFocus()).catch(() => {});
         return;
       }
-      w.setDecorations(true).catch(() => {});
+      w.setDecorations(true).then(() => w.setShadow(true)).catch(() => {});
       const bar = transportRef.current?.offsetHeight ?? 88;
       w.setSize(new LogicalSize(420, bar + (hasVideo ? Math.round(420 * 9 / 16) : 0))).catch(() => {});
     });
