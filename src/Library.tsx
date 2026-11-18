@@ -121,7 +121,6 @@ export function LibraryPage({ actions }: { actions: PlayActions }) {
   return (
     <section className="page">
       <div className="page-head">
-        <h1>Library</h1>
         <div className="row">
           <button className="btn" onClick={add}><Icon name="folder" /> Add folder</button>
           <button className="btn" onClick={scan} disabled={!roots.length || !!scanning}>Rescan</button>
@@ -215,7 +214,6 @@ export function MusicPage({ actions }: { actions: PlayActions }) {
   return (
     <section className="page">
       <div className="page-head">
-        <h1>Music</h1>
         <Search value={q} onChange={setQ} placeholder="Filter" />
       </div>
       <div className="tabs flat" role="tablist">
@@ -262,7 +260,6 @@ export function VideosPage({ actions }: { actions: PlayActions }) {
   return (
     <section className="page">
       <div className="page-head">
-        <h1>Videos</h1>
         <div className="row">
           <Search value={q} onChange={setQ} placeholder="Filter" />
           <select className="select" value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort">
@@ -391,7 +388,6 @@ export function PlaylistsPage({ actions, queue }: { actions: PlayActions; queue:
   return (
     <section className="page split">
       <div className="pl-list">
-        <div className="page-head"><h1>Playlists</h1></div>
         <div className="row">
           <button className="btn small" onClick={() => create(false)}><Icon name="plus" /> New</button>
           <button className="btn small" onClick={() => create(true)}><Icon name="plus" /> Smart</button>
@@ -490,7 +486,6 @@ export function NetworkPage({ actions }: { actions: PlayActions }) {
   };
   return (
     <section className="page">
-      <div className="page-head"><h1>Network</h1></div>
       <form className="row" onSubmit={(e) => { e.preventDefault(); if (url.includes("://")) go(url, url, true); }}>
         <input className="input grow" type="text" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="Location"
           placeholder="smb://server/share · ftp:// · sftp:// · nfs:// · upnp://" />
@@ -547,7 +542,6 @@ export function StatsPage({ privateMode, setPrivateMode }: { privateMode: boolea
   return (
     <section className="page">
       <div className="page-head">
-        <h1>Listening</h1>
         <div className="row">
           <label className="check"><input type="checkbox" checked={privateMode} onChange={(e) => setPrivateMode(e.target.checked)} /> Private session (record nothing)</label>
           <button className="btn small" onClick={() => api.clearHistory().then(reload)}>Clear history</button>

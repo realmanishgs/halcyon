@@ -1,6 +1,7 @@
 # Design system
 
-Principles: neutral foundation, **one** accent family, type and spacing carry hierarchy, no decorative
+Direction from the UI UX Pro Max skill ("Dark Mode (OLED)", dark audio + play green), adapted to keep system fonts.
+Principles: midnight-indigo foundation, **one** green accent family, type and spacing carry hierarchy, no decorative
 shadows/gradients/glass, motion only for state feedback, everything technical behind progressive disclosure.
 Source of truth: CSS custom properties at the top of [`src/styles.css`](src/styles.css).
 
@@ -8,12 +9,13 @@ Source of truth: CSS custom properties at the top of [`src/styles.css`](src/styl
 
 | Token | Light | Dark | Use |
 |---|---|---|---|
-| `--bg` | `#f6f6f4` | `#0d0d0e` | App background |
-| `--surface` | `#ffffff` | `#151517` | Sidebar, transport, panels |
-| `--surface-2` | `#eeeeeb` | `#1d1d20` | Hover, selected, placeholders |
-| `--border` | `#dcdcd8` | `#2a2a2e` | 1px dividers only where structure needs it |
-| `--text` / `--text-2` / `--text-3` | `#111` / `#55554f` / `#6b6b65` | `#ededea` / `#a3a39e` / `#85857f` | Primary / secondary / tertiary (all ≥ 4.5:1 on every surface, WCAG AA) |
-| `--accent` | `#2f5bd3` | `#7d9bff` | Progress fill, active toggles, stream tags, primary action |
+| `--bg` | `#f5f5fa` | `#0f0f23` | App background |
+| `--surface` | `#ffffff` | `#16162e` | Sidebar, transport, panels |
+| `--surface-2` | `#ebebf4` | `#22223d` | Hover, selected, placeholders |
+| `--border` | `#d9d9e6` | `#2e2c5c` | 1px dividers only where structure needs it |
+| `--text` / `--text-2` / `--text-3` | `#13122b` / `#4c4b66` / `#63627c` | `#f8fafc` / `#b4bccb` / `#94a3b8` | Primary / secondary / tertiary (≥ 4.5:1, WCAG AA) |
+| `--accent` | `#15803d` | `#22c55e` | Play button, progress fill, active toggles, primary action |
+| `--focus` | `#4338ca` | `#a5b4fc` | Keyboard focus ring |
 | `--danger` | `#b42318` | `#ff6b5e` | Errors only |
 | `--video-bg` | `#000` | `#000` | Video letterbox |
 
@@ -27,7 +29,7 @@ No web fonts (offline, privacy). Scale: 11 / 12 / 13 (base) / 16 / 22 / 32 px. S
 
 ## Space & size
 
-Spacing 4 / 8 / 12 / 16 / 24 / 32 / 48. Radius 4 (controls), 6 (artwork) — nothing pill-shaped except the play button.
+Spacing 4 / 8 / 12 / 16 / 24 / 32 / 48. Radius 6 (controls), 10 (artwork) — nothing pill-shaped except the play button.
 Control height 32, icon 18 (24-unit grid, 1.75 stroke). Sidebar 216 default, drag-resizable 160–360, snaps to a 56 px icon rail below 120. Side panel 340 default, resizable 260–60 % of the window.
 
 ## Motion
@@ -37,7 +39,7 @@ Control height 32, icon 18 (24-unit grid, 1.75 stroke). Sidebar 216 default, dra
 ## States
 
 Hover → `--surface-2` background. Focus → 2px `--focus` outline, 2px offset (keyboard only, `:focus-visible`).
-Disabled → `--text-3`, no hover. Pressed toggles → accent icon (`aria-pressed`). Playback: play button inverts (text-on-bg disc).
+Disabled → `--text-3`, no hover. Pressed toggles → accent icon (`aria-pressed`). Playback: play button is an accent-filled disc.
 
 ## Components (implemented)
 
@@ -48,7 +50,10 @@ stream block with badges, banner (error / info), drop overlay, modal, queue row 
 
 ## Layout rules
 
-- VLC-style transport: full-width seek row on top, controls row below (now-playing · transport · options).
+- Shell: sidebar (sections Play / Library / Tools, accent bar on the current page) | main column.
+  Main column = top bar (page title, Stream + Open actions) → stage + side panel → floating transport dock.
+- Transport dock: rounded card inset from the window edges; controls row (now-playing · transport · options)
+  with the seek row below. In mini player it flattens back to an edge-to-edge bar.
 - Every pane stretches: sidebar and panel are drag-resizable; the stage takes the rest.
 - Breakpoints: ≤ 860 px wide → sidebar becomes an icon rail, speed chip and volume slider hide;
   ≤ 600 px → sidebar hides, secondary transport buttons hide, an open panel takes the full width;

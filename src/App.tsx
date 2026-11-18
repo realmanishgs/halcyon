@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { LogicalSize, PhysicalPosition } from "@tauri-apps/api/dpi";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -815,6 +815,7 @@ export default function App() {
   };
 
   // ---------- render ----------
+  const viewLabel = view === "player" ? "Now playing" : view === "settings" ? "Settings" : NAV.find((n) => n.id === view)?.label ?? "";
   const title = meta?.title ?? (current ? basename(current) : "Nothing playing");
   const subtitle = [meta?.artist, meta?.album].filter(Boolean).join(" — ") ||
     (opened?.probe?.format.format_long_name ?? (current && /:\/\//.test(current) ? "Network stream" : ""));
@@ -828,7 +829,6 @@ export default function App() {
       // WebView2 fires synthetic zero-movement pointermoves after layout changes (e.g. the
       // controls hiding); only real movement may reveal them again.
       onPointerMove={fullscreen ? (e) => { if (e.movementX || e.movementY) wake(); } : undefined}>
-      <div className="body">
         {!sidebarHidden && (
           <>
             <nav className={`sidebar${sidebarMini ? " mini" : ""}`} style={{ width: sidebarMini ? 56 : sideW }} aria-label="Primary">
@@ -836,17 +836,21 @@ export default function App() {
                 <button className="icon-btn" onClick={() => setSideCollapsed((c) => !c)} aria-label="Toggle sidebar" title="Toggle sidebar"><Icon name="menu" /></button>
                 <span className="brand-name">Halcyon</span>
               </div>
+              <div className="nav-section">Play</div>
               <button className="nav-item" aria-current={view === "player" ? "page" : undefined} onClick={() => setView("player")} title="Now playing">
                 <Icon name="disc" /><span className="nav-label">Now playing</span>
               </button>
               <button className="nav-item" onClick={pickFiles} title="Open files (Ctrl+O)"><Icon name="open" /><span className="nav-label">Open files</span></button>
               <button className="nav-item" onClick={pickFolder} title="Open folder (Ctrl+Shift+O)"><Icon name="folder" /><span className="nav-label">Open folder</span></button>
               <button className="nav-item" onClick={() => setUrlOpen(true)} title="Open network stream (Ctrl+N)"><Icon name="network" /><span className="nav-label">Network stream</span></button>
-              <div className="nav-sep" />
-              {NAV.map((n) => (
-                <button key={n.id} className="nav-item" aria-current={view === n.id ? "page" : undefined} onClick={() => setView(n.id)} title={n.label}>
+              {NAV.map((n, i) => (
+                <Fragment key={n.id}>
+                {i === 0 && <div className="nav-section">Library</div>}
+                {i === 5 && <div className="nav-section">Tools</div>}
+                <button className="nav-item" aria-current={view === n.id ? "page" : undefined} onClick={() => setView(n.id)} title={n.label}>
                   <Icon name={n.icon} /><span className="nav-label">{n.label}</span>
                 </button>
+                </Fragment>
               ))}
               <div className="spacer" />
               <button className="nav-item" aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")} title="Settings">
@@ -857,6 +861,16 @@ export default function App() {
           </>
         )}
 
+      <div className="main">
+        {!fullscreen && !mini && (
+          <header className="topbar">
+            <h1 className="topbar-title">{viewLabel}</h1>
+            <span className="spacer" />
+            <button className="btn small" onClick={() => setUrlOpen(true)} title="Open network stream (Ctrl+N)"><Icon name="network" /><span className="hide-sm">Stream</span></button>
+            <button className="btn small primary" onClick={pickFiles} title="Open files (Ctrl+O)"><Icon name="open" /><span className="hide-xs">Open</span></button>
+          </header>
+        )}
+      <div className="body">
         {!panelTakesOver && (
           <main className="stage">
             {(error || engineMissing) && (
@@ -1022,7 +1036,6 @@ export default function App() {
       })()}
       <footer className={`transport${fullscreen && !controlsShown ? " hidden" : ""}${skin && mini ? " skinned" : ""}`} ref={transportRef}
         onPointerEnter={() => { overTransport.current = true; }} onPointerLeave={() => { overTransport.current = false; wake(); }}>
-        <SeekBar status={viewStatus} receivedAt={receivedAt} onSeek={seekTo} chapters={chapters} />
         <div className="controls">
           <div className="now">
             {art ? <img className="thumb" src={art} alt="" /> : <div className="thumb"><Icon name={hasVideo ? "video" : "music"} /></div>}
@@ -1076,7 +1089,9 @@ export default function App() {
             )}
           </div>
         </div>
+        <SeekBar status={viewStatus} receivedAt={receivedAt} onSeek={seekTo} chapters={chapters} />
       </footer>
+      </div>
     </div>
   );
 }

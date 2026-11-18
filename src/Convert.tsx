@@ -35,7 +35,6 @@ export function ConvertPage({ current, timeMs, say, onPlay }: { current: string 
   const ms = (v: number | null) => (v === null ? "—" : formatTime(v));
   return (
     <section className="page">
-      <div className="page-head"><h1>Convert</h1></div>
       <p className="muted small">Runs your installed FFmpeg in a separate process. Nothing is uploaded.</p>
       <div className="form">
         <label>Source</label>

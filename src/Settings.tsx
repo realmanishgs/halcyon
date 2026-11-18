@@ -45,7 +45,6 @@ export function SettingsPage(p: {
   const has = (cat: string, name: string) => plugins.some(([c2, v]) => c2 === cat && v.includes(name));
   return (
     <section className="page">
-      <h1>Settings</h1>
       <div className="settings">
         <h2 className="section">Appearance</h2>
         <div className="form">

@@ -142,7 +142,6 @@ export function LabPage({ current, timeMs, onAudition, onSeek, onLevel, say }: {
   return (
     <section className="page lab">
       <div className="page-head">
-        <h1>Immersive Audio Lab</h1>
         <div className="row">
           <button className="btn" onClick={async () => { const f = await openDialog({ multiple: false }); if (typeof f === "string") setPath(f); }}><Icon name="open" /> Choose file</button>
           {current && current !== path && <button className="btn" onClick={() => setPath(current)}>Use now playing</button>}
